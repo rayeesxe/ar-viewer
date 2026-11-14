@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "AR Viewer",
-    "slug": "ar-viewer",
+    "name": "My View",
+    "slug": "my-view",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -9,7 +9,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.rayees.arviewer",
       "infoPlist": {
-        "NSCameraUsageDescription": "AR Viewer uses your camera to place 3D objects in your room."
+        "NSCameraUsageDescription": "My View uses your camera to place 3D objects in your room."
       },
       "icon": "./assets/icon.png"
     },
@@ -32,10 +32,10 @@
             "xRMode": "AR"
           },
           "ios": {
-            "cameraUsagePermission": "AR Viewer uses your camera to place 3D objects in your room.",
-            "microphoneUsagePermission": "AR Viewer does not record audio.",
-            "photosPermission": "AR Viewer can read photos for AR experiences.",
-            "savePhotosPermission": "AR Viewer can save screenshots of your AR scene."
+            "cameraUsagePermission": "My View uses your camera to place 3D objects in your room.",
+            "microphoneUsagePermission": "My View does not record audio.",
+            "photosPermission": "My View can read photos for AR experiences.",
+            "savePhotosPermission": "My View can save screenshots of your AR scene."
           }
         }
       ]

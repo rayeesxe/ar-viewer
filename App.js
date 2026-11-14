@@ -16,7 +16,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
 import ARScene from './src/ARScene';
-import { CATALOG, modelUrl } from './src/catalog';
+import { CATALOG } from './src/catalog';
 import { getState, setState, useStore } from './src/store';
 
 LogBox.ignoreAllLogs(true);
@@ -75,7 +75,7 @@ export default function App() {
 
   // ----- actions -----
   const pick = (item) => {
-    setState({ modelId: item.id, modelUrl: modelUrl(item.id), placed: false });
+    setState({ modelId: item.id, modelUrl: item.url, placed: false });
     animateSheet(false);
   };
   const place = () => setState({ placeNonce: getState().placeNonce + 1 });
@@ -165,7 +165,7 @@ export default function App() {
               value={query}
               onChangeText={setQuery}
               onFocus={() => animateSheet(true)}
-              placeholder="Search chair, sofa, lamp, shoe..."
+              placeholder="Search helmet, robot, fox, shoe..."
               placeholderTextColor="rgba(255,255,255,0.5)"
               style={styles.searchInput}
               returnKeyType="search"
