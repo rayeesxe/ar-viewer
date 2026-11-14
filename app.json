@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "AR Viewer",
+    "slug": "ar-viewer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.rayees.arviewer",
+      "infoPlist": {
+        "NSCameraUsageDescription": "AR Viewer uses your camera to place 3D objects in your room."
+      }
+    },
+    "android": {
+      "package": "com.rayees.arviewer"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "enableSceneSupport": true
+          }
+        }
+      ],
+      [
+        "@reactvision/react-viro",
+        {
+          "android": {
+            "xRMode": "AR"
+          },
+          "ios": {
+            "cameraUsagePermission": "AR Viewer uses your camera to place 3D objects in your room.",
+            "microphoneUsagePermission": "AR Viewer does not record audio.",
+            "photosPermission": "AR Viewer can read photos for AR experiences.",
+            "savePhotosPermission": "AR Viewer can save screenshots of your AR scene."
+          }
+        }
+      ]
+    ]
+  }
+}
