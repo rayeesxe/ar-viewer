@@ -10,7 +10,8 @@
       "bundleIdentifier": "com.rayees.arviewer",
       "infoPlist": {
         "NSCameraUsageDescription": "AR Viewer uses your camera to place 3D objects in your room."
-      }
+      },
+      "icon": "./assets/icon.png"
     },
     "android": {
       "package": "com.rayees.arviewer"
@@ -38,6 +39,7 @@
           }
         }
       ]
-    ]
+    ],
+    "icon": "./assets/icon.png"
   }
 }
