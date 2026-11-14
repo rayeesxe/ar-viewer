@@ -1,0 +1,79 @@
+name: Build iPhone app
+
+# Builds an UNSIGNED .ipa on a free GitHub Mac.
+# Sideloadly signs it with your free Apple ID when you install it on your iPhone.
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "standalone = runs on its own | dev = live updates from your PC"
+        type: choice
+        options:
+          - standalone
+          - dev
+        default: standalone
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install packages
+        run: npm install --no-audit --no-fund
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Generate the iOS project
+        run: npx expo prebuild --platform ios --clean --no-install
+
+      - name: Install iOS libraries (CocoaPods)
+        run: cd ios && pod install
+
+      - name: Build the app (unsigned)
+        run: |
+          set -o pipefail
+          CONFIG=Release
+          if [ "${{ inputs.build_type }}" = "dev" ]; then CONFIG=Debug; fi
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          echo "Workspace: $WS  Scheme: $SCHEME  Config: $CONFIG"
+          xcodebuild \
+            -workspace "$WS" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIG" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|\*\* BUILD" || true
+          test -d build/Build/Products/$CONFIG-iphoneos/$SCHEME.app || { echo "Build failed, see build.log artifact"; exit 1; }
+          mkdir -p out/Payload
+          cp -R "build/Build/Products/$CONFIG-iphoneos/$SCHEME.app" out/Payload/
+          cd out && zip -qry "../ARViewer-$CONFIG.ipa" Payload
+
+      - name: Upload the app (.ipa)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARViewer-ipa
+          path: "*.ipa"
+          retention-days: 14
+
+      - name: Upload build log (only if something failed)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
