@@ -136,9 +136,12 @@ export default function ARScene() {
         const sx = b.maxX - b.minX;
         const sy = b.maxY - b.minY;
         const sz = b.maxZ - b.minZ;
-        const maxDim = Math.max(sx, sy, sz) || 1;
-        // keep real-world size when it is believable, otherwise scale to about 70 cm
-        const k = maxDim > 5 || maxDim < 0.06 ? 0.7 / maxDim : 1;
+        const maxDim = Math.max(sx, sy, sz);
+        if (!isFinite(maxDim) || maxDim <= 0) throw new Error('bad bounds');
+        // keep real-world size when it is believable; small items to ~35 cm, huge ones to ~1 m
+        let k = 1;
+        if (maxDim < 0.15) k = 0.35 / maxDim;
+        else if (maxDim > 4) k = 1 / maxDim;
         const cx = (b.minX + b.maxX) / 2;
         const cz = (b.minZ + b.maxZ) / 2;
         done({

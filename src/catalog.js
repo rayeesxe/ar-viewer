@@ -1,42 +1,28 @@
-const BASE =
-  'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
+// 3D objects that use standard materials only (no glass/sheen/iridescence/Draco),
+// so the AR engine can draw every one of them.
+const K = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
+const k = (id) => `${K}${id}/glTF-Binary/${id}.glb`;
+const T = 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/';
+const M = 'https://raw.githubusercontent.com/google/model-viewer/master/packages/shared-assets/models/';
 
-export const modelUrl = (id) => `${BASE}${id}/glTF-Binary/${id}.glb`;
-
-// Photorealistic test objects (Khronos glTF sample assets, hosted on GitHub)
 export const CATALOG = [
-  { id: 'DamagedHelmet', name: 'Sci-fi Helmet', tags: 'helmet space armour', cat: 'Props' },
-  { id: 'Avocado', name: 'Avocado', tags: 'fruit food green', cat: 'Food' },
-  { id: 'BoomBox', name: 'Boombox', tags: 'radio music speaker retro', cat: 'Electronics' },
-  { id: 'Lantern', name: 'Street Lantern', tags: 'lamp light street', cat: 'Lighting' },
-  { id: 'WaterBottle', name: 'Water Bottle', tags: 'drink bottle flask', cat: 'Everyday' },
-  { id: 'ToyCar', name: 'Toy Car', tags: 'car vehicle toy', cat: 'Vehicles' },
-  { id: 'CarConcept', name: 'Concept Car', tags: 'car vehicle sports auto', cat: 'Vehicles' },
-  { id: 'SheenChair', name: 'Velvet Chair', tags: 'chair seat furniture', cat: 'Furniture' },
-  { id: 'GlamVelvetSofa', name: 'Velvet Sofa', tags: 'sofa couch furniture', cat: 'Furniture' },
-  { id: 'SheenWoodLeatherSofa', name: 'Leather Sofa', tags: 'sofa couch furniture wood', cat: 'Furniture' },
-  { id: 'ChairDamaskPurplegold', name: 'Damask Chair', tags: 'chair seat furniture', cat: 'Furniture' },
-  { id: 'SpecularSilkPouf', name: 'Silk Pouf', tags: 'pouf ottoman seat furniture', cat: 'Furniture' },
-  { id: 'ChronographWatch', name: 'Chronograph Watch', tags: 'watch clock wrist', cat: 'Accessories' },
-  { id: 'MaterialsVariantsShoe', name: 'Sneaker', tags: 'shoe trainer footwear', cat: 'Fashion' },
-  { id: 'Corset', name: 'Corset', tags: 'clothing fashion', cat: 'Fashion' },
-  { id: 'SunglassesKhronos', name: 'Sunglasses', tags: 'glasses shades', cat: 'Accessories' },
-  { id: 'AntiqueCamera', name: 'Antique Camera', tags: 'camera photo vintage', cat: 'Electronics' },
-  { id: 'CommercialRefrigerator', name: 'Drinks Fridge', tags: 'fridge refrigerator appliance', cat: 'Appliances' },
-  { id: 'AnisotropyBarnLamp', name: 'Barn Lamp', tags: 'lamp light metal', cat: 'Lighting' },
-  { id: 'IridescenceLamp', name: 'Iridescent Lamp', tags: 'lamp light', cat: 'Lighting' },
-  { id: 'LightsPunctualLamp', name: 'Desk Lamp', tags: 'lamp light desk', cat: 'Lighting' },
-  { id: 'GlassVaseFlowers', name: 'Vase of Flowers', tags: 'vase flowers plant glass', cat: 'Decor' },
-  { id: 'GlassHurricaneCandleHolder', name: 'Candle Holder', tags: 'candle glass decor', cat: 'Decor' },
-  { id: 'DiffuseTransmissionPlant', name: 'House Plant', tags: 'plant pot green', cat: 'Decor' },
-  { id: 'DiffuseTransmissionTeacup', name: 'Teacup', tags: 'cup tea drink', cat: 'Everyday' },
-  { id: 'IridescentDishWithOlives', name: 'Dish of Olives', tags: 'food olives plate bowl', cat: 'Food' },
-  { id: 'PotOfCoals', name: 'Pot of Coals', tags: 'fire coal pot', cat: 'Props' },
-  { id: 'TrafficCone', name: 'Traffic Cone', tags: 'cone road', cat: 'Props' },
-  { id: 'BarramundiFish', name: 'Barramundi Fish', tags: 'fish animal sea', cat: 'Animals' },
-  { id: 'Fox', name: 'Fox', tags: 'fox animal', cat: 'Animals' },
-  { id: 'DragonAttenuation', name: 'Glass Dragon', tags: 'dragon glass statue', cat: 'Decor' },
-  { id: 'ScatteringSkull', name: 'Skull', tags: 'skull bone', cat: 'Props' },
-  { id: 'MosquitoInAmber', name: 'Mosquito in Amber', tags: 'amber insect fossil', cat: 'Decor' },
-  { id: 'ABeautifulGame', name: 'Chess Set', tags: 'chess game board', cat: 'Games' },
+  { id: 'helmet', url: k('DamagedHelmet'), name: 'Sci-fi Helmet', tags: 'helmet space armour', cat: 'Props' },
+  { id: 'boombox', url: k('BoomBox'), name: 'Boombox', tags: 'radio music speaker retro', cat: 'Electronics' },
+  { id: 'camera', url: k('AntiqueCamera'), name: 'Antique Camera', tags: 'camera photo vintage tripod', cat: 'Electronics' },
+  { id: 'lantern', url: k('Lantern'), name: 'Street Lantern', tags: 'lamp light street lantern', cat: 'Lighting' },
+  { id: 'bottle', url: k('WaterBottle'), name: 'Water Bottle', tags: 'drink bottle flask', cat: 'Everyday' },
+  { id: 'avocado', url: k('Avocado'), name: 'Avocado', tags: 'fruit food green', cat: 'Food' },
+  { id: 'kebab', url: M + 'shishkebab.glb', name: 'Shish Kebab', tags: 'food kebab grill', cat: 'Food' },
+  { id: 'shoe', url: k('MaterialsVariantsShoe'), name: 'Sneaker', tags: 'shoe trainer footwear', cat: 'Fashion' },
+  { id: 'corset', url: k('Corset'), name: 'Corset', tags: 'clothing fashion', cat: 'Fashion' },
+  { id: 'truck', url: k('CesiumMilkTruck'), name: 'Milk Truck', tags: 'truck vehicle car van', cat: 'Vehicles' },
+  { id: 'rocket', url: M + 'RocketShip.glb', name: 'Rocket Ship', tags: 'rocket space ship toy', cat: 'Vehicles' },
+  { id: 'astronaut', url: M + 'Astronaut.glb', name: 'Astronaut', tags: 'astronaut space person', cat: 'People' },
+  { id: 'robot', url: M + 'RobotExpressive.glb', name: 'Robot', tags: 'robot toy character', cat: 'Characters' },
+  { id: 'fox', url: k('Fox'), name: 'Fox', tags: 'fox animal', cat: 'Animals' },
+  { id: 'horse', url: T + 'Horse.glb', name: 'Horse', tags: 'horse animal', cat: 'Animals' },
+  { id: 'fish', url: k('BarramundiFish'), name: 'Barramundi Fish', tags: 'fish animal sea', cat: 'Animals' },
+  { id: 'parrot', url: T + 'Parrot.glb', name: 'Parrot', tags: 'parrot bird animal', cat: 'Animals' },
+  { id: 'flamingo', url: T + 'Flamingo.glb', name: 'Flamingo', tags: 'flamingo bird animal', cat: 'Animals' },
+  { id: 'duck', url: k('Duck'), name: 'Rubber Duck', tags: 'duck toy bath', cat: 'Toys' },
 ];
