@@ -1,0 +1,22 @@
+{
+  "name": "ar-viewer",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "start": "expo start --dev-client",
+    "tunnel": "expo start --dev-client --tunnel"
+  },
+  "dependencies": {
+    "@reactvision/react-viro": "3.1.1",
+    "expo": "~57.0.26",
+    "expo-build-properties": "~57.0.22",
+    "expo-dev-client": "~57.0.19",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  },
+  "resolutions": {
+    "react": "19.2.3"
+  }
+}
