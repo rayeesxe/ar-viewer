@@ -36,7 +36,12 @@ jobs:
       - name: Install packages
         run: |
           npm install --no-audit --no-fund
-          npx expo install react-native-webview expo-constants expo-speech-recognition
+          npx expo install react-native-webview expo-constants expo-speech-recognition expo-speech expo-image-manipulator
+
+      - name: Make the watermark image
+        run: |
+          python3 -m pip install --quiet --break-system-packages pillow || python3 -m pip install --quiet --user --break-system-packages pillow || true
+          python3 make_watermark.py || cp assets/icon.png assets/eye.png
 
       - name: Show Xcode version
         run: xcodebuild -version
