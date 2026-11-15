@@ -22,7 +22,7 @@ import ARScene from './src/ARScene';
 import { CATALOG, CATEGORIES } from './src/catalog';
 import VideoPanel from './src/VideoPanel';
 import { toSearchQuery } from './src/youtube';
-import { findModel } from './src/modelSearch';
+import { findModel, markFailed } from './src/modelSearch';
 import { getState, setState, useStore } from './src/store';
 
 LogBox.ignoreAllLogs(true);
@@ -46,6 +46,7 @@ export default function App() {
   const [cat, setCat] = useState('All');
 
   const [query, setQuery] = useState('');
+  const searchId = useRef(0);
   const [sheetOpen, setSheetOpen] = useState(false);
   const selected =
     CATALOG.find((c) => c.id === modelId) || (modelId === 'remote' && remote) || null;
@@ -87,7 +88,16 @@ export default function App() {
 
   // ----- actions -----
   const pick = (item) => {
-    setState({ modelId: item.id, modelUrl: item.url, placed: false, remote: null });
+    searchId.current++; // cancel any online search still running
+    setState({
+      modelId: item.id,
+      modelUrl: item.url,
+      placed: false,
+      remote: null,
+      searchStatus: null,
+      // mark loading straight away so Siri's auto-place waits for the new model
+      ...(getState().modelUrl !== item.url ? { loadState: 'loading' } : null),
+    });
     animateSheet(false);
   };
   const place = () =>
@@ -99,7 +109,6 @@ export default function App() {
   const watch = (q) => setState({ videoQuery: toSearchQuery(q) });
 
   // Anything at all: our catalog first, then online 3D libraries, then AI, then YouTube
-  const searchId = useRef(0);
   const showAnything = async (q, auto) => {
     const norm = q.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\b(a|an|the|some|me|show|please)\b/g, ' ').replace(/\s+/g, ' ').trim();
     const local = CATALOG.find(
@@ -116,13 +125,30 @@ export default function App() {
     setState({ searchStatus: null });
     if (!found) return watch(q);
     autoPlace.current = !!auto;
+    lastRemote.current = { q, auto, key: found.key, tries: (lastRemote.current && lastRemote.current.q === q ? lastRemote.current.tries : 0) };
     setState({
       modelId: 'remote',
       modelUrl: found.url,
       placed: false,
+      loadState: 'loading',
       remote: { id: 'remote', name: found.name, credit: found.credit },
     });
   };
+
+  // An online model that won't load on this phone: quietly try the next match
+  const lastRemote = useRef(null);
+  useEffect(() => {
+    const lr = lastRemote.current;
+    if (loadState !== 'error' || modelId !== 'remote' || !lr) return;
+    markFailed(lr.key);
+    if (lr.tries >= 2) {
+      lastRemote.current = null;
+      watch(lr.q);
+      return;
+    }
+    lr.tries += 1;
+    showAnything(lr.q, lr.auto);
+  }, [loadState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Typed search with no matching object: look it up on YouTube instead
   const submitSearch = () => {
