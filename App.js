@@ -17,6 +17,8 @@ import {
   Linking,
   ScrollView,
   ActivityIndicator,
+  Image,
+  useWindowDimensions,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
@@ -26,7 +28,9 @@ import StepsEntity from './src/StepsEntity';
 import { CATALOG, CATEGORIES } from './src/catalog';
 import { toSearchQuery } from './src/youtube';
 import { findModel, markFailed } from './src/modelSearch';
-import { aiAvailable, understand, stepsFor } from './src/ai';
+import { aiAvailable, understand, stepsFor, lookAt } from './src/ai';
+import { snapshot } from './src/vision';
+import { say, hush } from './src/speak';
 import { useVoice, quickCommand, looksLikeRequest, voiceSupported } from './src/voice';
 import { pose, frontPoint, yawFacing } from './src/camera';
 import {
@@ -207,6 +211,12 @@ export default function App() {
   const listening = useStore((s) => s.listening);
   const voiceState = useStore((s) => s.voiceState);
   const heard = useStore((s) => s.heard);
+  const speaking = useStore((s) => s.speaking);
+  const answer = useStore((s) => s.answer);
+  const { width: winW, height: winH } = useWindowDimensions();
+  const landscape = winW > winH;
+  const navRef = useRef(null);
+  const answerTimer = useRef(null);
 
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('All');
@@ -329,13 +339,55 @@ export default function App() {
     if (auto) autoIds.current.add(id);
   };
 
+  // An answer card (and spoken reply) from the AI
+  const showAnswer = (text, suggestions, speak = true) => {
+    if (!text) return;
+    clearTimeout(answerTimer.current);
+    setState({ answer: { text, suggestions: (suggestions || []).slice(0, 3) } });
+    answerTimer.current = setTimeout(() => setState({ answer: null }), 30000);
+    if (speak) say(text);
+  };
+
+  // "What is this?": look through the camera with Gemini
+  const doLook = async (question) => {
+    if (!aiAvailable()) return toast('Looking needs the AI key');
+    setState({ searchStatus: 'Looking...' });
+    try {
+      const img = await snapshot(navRef);
+      if (!img) {
+        setState({ searchStatus: null });
+        return toast("Couldn't capture the camera");
+      }
+      setState({ searchStatus: 'Thinking...' });
+      const res = await lookAt(img, question || 'What is this?');
+      setState({ searchStatus: null });
+      if (!res) return toast("Couldn't work that out, try again");
+      showAnswer(res.answer, res.suggestions);
+    } catch (e) {
+      setState({ searchStatus: null });
+      toast("Couldn't look right now");
+    }
+  };
+
   // Anything you say or type
   const handleRequest = async (text, { auto = true, fromVoice = false } = {}) => {
     const q = (text || '').trim();
     if (!q) return;
     const qc = quickCommand(q);
+    if (qc === 'look') return doLook(q);
+    if (qc === 'hush') {
+      hush();
+      return setState({ answer: null });
+    }
     if (qc) return runCommand(qc);
     if (fromVoice && !looksLikeRequest(q)) return; // background talk or a video speaking
+    // while a video is playing out loud, only clear requests count, so its narration can't trigger things
+    if (
+      fromVoice &&
+      getState().soundId &&
+      !/^(hey |ok |okay )?(my view|view)\b|^(please )?(show me|show|put|place|add|open|find|bring|search)\b/i.test(q)
+    )
+      return;
 
     if (aiAvailable()) {
       setState({ searchStatus: 'Thinking...' });
@@ -346,6 +398,8 @@ export default function App() {
         const a = intent.action;
         if (a === 'none') return fromVoice ? null : toast(`Not sure what to do with "${q}"`);
         if (a === 'command' && intent.command) return runCommand(intent.command, intent.target);
+        if (a === 'look') return doLook(q);
+        if (a === 'answer') return showAnswer(intent.answer || "I'm not sure.", intent.suggestions);
         const steps = Array.isArray(intent.steps) && intent.steps.length ? intent.steps.slice(0, 8) : null;
         if (a === 'video' || a === 'both') {
           addVideo(intent.video_query || q, auto, { request: q, steps, exact: !!intent.video_query });
@@ -371,7 +425,7 @@ export default function App() {
   // ----- hands-free voice -----
   const heardTimer = useRef(null);
   useVoice(
-    listening,
+    listening && !speaking,
     (text, final) => {
       setState({ heard: text });
       clearTimeout(heardTimer.current);
@@ -459,6 +513,7 @@ export default function App() {
   else if (pendingModel) guide = aimOnSurface ? 'Tap Place, or say "place it"' : 'Point at the floor, or tap Place to put it in front of you';
   else if (pendingVideo) guide = 'Face where you want the screen, then say "place it"';
   else if (selected) guide = `${selected.name || 'Object'} selected`;
+  else if (placed.some((e) => e.kind === 'video')) guide = 'Tap a video, then turn sideways for full screen';
   else if (placed.length) guide = 'Walk around. Say what you want to add';
   else if (!surfaceFound) guide = 'Move your phone slowly to scan the floor';
   else guide = listening && voiceState === 'listening' ? 'Say "show me..." or swipe up' : 'Swipe up, or ask Siri, to add something';
@@ -473,6 +528,7 @@ export default function App() {
       <StatusBar style="light" />
 
       <ViroARSceneNavigator
+        ref={navRef}
         initialScene={{ scene: ARScene }}
         style={StyleSheet.absoluteFill}
         autofocus
@@ -489,6 +545,23 @@ export default function App() {
         <VideoEntity key={e.id} entity={e} onPlace={() => placeVideo(e.id)} />
       ))}
 
+      {/* My View watermark */}
+      <Image
+        source={require('./assets/eye.png')}
+        style={[styles.watermark, landscape && styles.watermarkLand]}
+        resizeMode="contain"
+        pointerEvents="none"
+      />
+
+      {/* sideways with no video: a short hint, nothing else in the way */}
+      {landscape && !videos.some((v) => v.status === 'placed' || v.status === 'pending') && (
+        <View style={styles.landHint} pointerEvents="none">
+          <Text style={styles.landHintText}>Tap a video screen, then turn sideways to watch it full screen</Text>
+        </View>
+      )}
+
+      {!landscape && (
+      <>
       {/* guidance */}
       <View style={styles.topBar} pointerEvents="box-none">
         <View style={[styles.pill, { flexDirection: 'row', alignItems: 'center' }]}>
@@ -502,6 +575,40 @@ export default function App() {
           <Text style={styles.credit} numberOfLines={1}>
             {credit}
           </Text>
+        )}
+        {answer && (
+          <View style={styles.answer}>
+            <View style={styles.answerHead}>
+              <Text style={styles.answerLabel}>My View</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  hush();
+                  setState({ answer: null });
+                }}
+                hitSlop={10}
+              >
+                <Text style={styles.answerX}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.answerText}>{answer.text}</Text>
+            {answer.suggestions && answer.suggestions.length > 0 && (
+              <View style={styles.answerChips}>
+                {answer.suggestions.map((sug) => (
+                  <TouchableOpacity
+                    key={sug}
+                    style={styles.answerChip}
+                    onPress={() => {
+                      setState({ answer: null });
+                      hush();
+                      handleRequest(sug, { auto: true });
+                    }}
+                  >
+                    <Text style={styles.answerChipText}>{sug}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
         )}
       </View>
 
@@ -747,6 +854,8 @@ export default function App() {
           />
         </View>
       </Animated.View>
+      </>
+      )}
     </View>
   );
 }
@@ -760,7 +869,7 @@ const glass = {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
 
-  topBar: { position: 'absolute', top: 58, left: 24, right: 24, alignItems: 'center' },
+  topBar: { position: 'absolute', top: 58, left: 64, right: 64, alignItems: 'center' },
   pill: { ...glass, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 22, maxWidth: '100%' },
   pillText: { color: '#fff', fontSize: 15, fontWeight: '500', textAlign: 'center' },
   toast: {
@@ -881,6 +990,41 @@ const styles = StyleSheet.create({
   roomRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10 },
   roomKind: { color: 'rgba(255,255,255,0.7)', fontSize: 12, width: 14 },
   roomName: { flex: 1, color: '#fff', fontSize: 14 },
+  watermark: {
+    position: 'absolute',
+    top: 58,
+    right: 14,
+    width: 40,
+    height: 26,
+    opacity: 0.5,
+  },
+  watermarkLand: { top: 16, right: 22 },
+  landHint: { position: 'absolute', bottom: 24, left: 0, right: 0, alignItems: 'center' },
+  landHintText: {
+    color: '#fff',
+    fontSize: 14,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  answer: {
+    marginTop: 10,
+    alignSelf: 'stretch',
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(14,14,16,0.88)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  answerHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  answerLabel: { color: 'rgba(255,255,255,0.55)', fontSize: 11, fontWeight: '700', letterSpacing: 0.6 },
+  answerX: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '700' },
+  answerText: { color: '#fff', fontSize: 15, lineHeight: 21 },
+  answerChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  answerChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.14)' },
+  answerChipText: { color: '#fff', fontSize: 13 },
   caption: {
     position: 'absolute',
     left: 24,
