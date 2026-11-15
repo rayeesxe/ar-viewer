@@ -1,5 +1,5 @@
 // AR Viewer: camera screen, swipe-up search, tap Place to anchor an object on your floor.
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   Keyboard,
   LogBox,
+  Linking,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
@@ -79,6 +80,30 @@ export default function App() {
     animateSheet(false);
   };
   const place = () => setState({ placeNonce: getState().placeNonce + 1 });
+
+  // ----- Siri: "Hey Siri, show me an avocado in My View" opens myview://show/avocado -----
+  const autoPlace = useRef(false);
+  useEffect(() => {
+    const handle = (url) => {
+      const m = url && url.match(/show\/([a-z0-9_-]+)/i);
+      const item = m && CATALOG.find((c) => c.id === m[1].toLowerCase());
+      if (item) {
+        autoPlace.current = true;
+        pick(item);
+      }
+    };
+    Linking.getInitialURL().then(handle).catch(() => {});
+    const sub = Linking.addEventListener('url', (e) => handle(e.url));
+    return () => sub.remove();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When Siri asked for it, drop it on the floor as soon as the floor is found
+  useEffect(() => {
+    if (autoPlace.current && loadState === 'ready' && aimOnSurface && !placed) {
+      autoPlace.current = false;
+      place();
+    }
+  }, [loadState, aimOnSurface, placed]); // eslint-disable-line react-hooks/exhaustive-deps
   const move = () => setState({ placed: false });
   const remove = () => setState({ modelId: null, modelUrl: null, placed: false });
 

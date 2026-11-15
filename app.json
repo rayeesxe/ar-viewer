@@ -38,8 +38,10 @@
             "savePhotosPermission": "My View can save screenshots of your AR scene."
           }
         }
-      ]
+      ],
+      "./plugins/withAppIntents"
     ],
-    "icon": "./assets/icon.png"
+    "icon": "./assets/icon.png",
+    "scheme": "myview"
   }
 }
