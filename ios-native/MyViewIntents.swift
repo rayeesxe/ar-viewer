@@ -300,6 +300,19 @@ struct SearchIntent: AppIntent {
   }
 }
 
+// "Hey Siri, clear My View"
+struct ClearRoomIntent: AppIntent {
+  static let title: LocalizedStringResource = "Clear room"
+  static let description = IntentDescription("Removes every object and video screen from your room.")
+  static let openAppWhenRun: Bool = true
+
+  @MainActor
+  func perform() async throws -> some IntentResult {
+    await openMyView("clear")
+    return .result()
+  }
+}
+
 struct MyViewShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
@@ -350,6 +363,16 @@ struct MyViewShortcuts: AppShortcutsProvider {
       ],
       shortTitle: "Search",
       systemImageName: "magnifyingglass"
+    )
+    AppShortcut(
+      intent: ClearRoomIntent(),
+      phrases: [
+        "Clear \(.applicationName)",
+        "Clear my room in \(.applicationName)",
+        "Empty \(.applicationName)"
+      ],
+      shortTitle: "Clear room",
+      systemImageName: "trash"
     )
   }
 }
