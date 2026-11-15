@@ -1,4 +1,4 @@
-// AR Viewer: camera screen, swipe-up search, tap Place to anchor an object on your floor.
+// My View: camera screen, swipe-up search, tap Place to anchor an object, Siri and YouTube hands free.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -13,11 +13,15 @@ import {
   Keyboard,
   LogBox,
   Linking,
+  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
 import ARScene from './src/ARScene';
-import { CATALOG } from './src/catalog';
+import { CATALOG, CATEGORIES, matchObject } from './src/catalog';
+import VideoPanel from './src/VideoPanel';
+import { toSearchQuery } from './src/youtube';
 import { getState, setState, useStore } from './src/store';
 
 LogBox.ignoreAllLogs(true);
@@ -35,6 +39,8 @@ export default function App() {
   const surfaceFound = useStore((s) => s.surfaceFound);
   const aimOnSurface = useStore((s) => s.aimOnSurface);
   const loadState = useStore((s) => s.loadState);
+  const videoQuery = useStore((s) => s.videoQuery);
+  const [cat, setCat] = useState('All');
 
   const [query, setQuery] = useState('');
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -70,26 +76,67 @@ export default function App() {
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return CATALOG;
-    return CATALOG.filter((o) => `${o.name} ${o.tags} ${o.cat}`.toLowerCase().includes(q));
-  }, [query]);
+    const inCat = cat === 'All' ? CATALOG : CATALOG.filter((o) => o.cat === cat);
+    if (!q) return inCat;
+    return inCat.filter((o) => `${o.name} ${o.tags} ${o.cat}`.toLowerCase().includes(q));
+  }, [query, cat]);
 
   // ----- actions -----
   const pick = (item) => {
     setState({ modelId: item.id, modelUrl: item.url, placed: false });
     animateSheet(false);
   };
-  const place = () => setState({ placeNonce: getState().placeNonce + 1 });
+  const place = () =>
+    setState({
+      placeFront: getState().placeFront || !getState().aimOnSurface,
+      placeNonce: getState().placeNonce + 1,
+    });
 
-  // ----- Siri: "Hey Siri, show me an avocado in My View" opens myview://show/avocado -----
+  const watch = (q) => setState({ videoQuery: toSearchQuery(q) });
+
+  // Typed search with no matching object: look it up on YouTube instead
+  const submitSearch = () => {
+    const q = query.trim();
+    if (!q) return;
+    if (results[0]) return pick(results[0]);
+    watch(q);
+    setQuery('');
+    animateSheet(false);
+  };
+
+  // ----- Siri -----
+  // myview://show/<object>   "Hey Siri, show me an avocado in My View"
+  // myview://watch/<words>   "Hey Siri, show me how to make a sandwich in My View"
+  // myview://search/<words>  "Hey Siri, search My View" -> object if we have it, otherwise YouTube
   const autoPlace = useRef(false);
+  const summon = (item) => {
+    autoPlace.current = true;
+    if (getState().modelId === item.id) setState({ placed: false });
+    else pick(item);
+  };
   useEffect(() => {
     const handle = (url) => {
-      const m = url && url.match(/show\/([a-z0-9_-]+)/i);
-      const item = m && CATALOG.find((c) => c.id === m[1].toLowerCase());
-      if (item) {
-        autoPlace.current = true;
-        pick(item);
+      if (!url) return;
+      const m = url.match(/myview:\/\/(show|watch|search)\/(.+)$/i);
+      if (!m) return;
+      const kind = m[1].toLowerCase();
+      let arg = m[2];
+      try {
+        arg = decodeURIComponent(arg.replace(/\+/g, ' '));
+      } catch (e) {}
+      arg = arg.trim();
+      if (kind === 'show') {
+        const item = CATALOG.find((c) => c.id === arg.toLowerCase()) || matchObject(arg);
+        if (item) summon(item);
+        else watch(arg);
+      } else if (kind === 'watch') {
+        watch(arg);
+        const item = CATALOG.find((c) => ` ${arg.toLowerCase()} `.includes(` ${c.id} `));
+        if (item) summon(item);
+      } else {
+        const item = matchObject(arg);
+        if (item && !/^how\b/i.test(arg)) summon(item);
+        else watch(arg);
       }
     };
     Linking.getInitialURL().then(handle).catch(() => {});
@@ -97,33 +144,45 @@ export default function App() {
     return () => sub.remove();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When Siri asked for it, drop it on the floor as soon as the floor is found
+  // When Siri asked for it: drop it on the floor you are pointing at, or right in front of you
   useEffect(() => {
-    if (autoPlace.current && loadState === 'ready' && aimOnSurface && !placed) {
+    if (!autoPlace.current || loadState !== 'ready' || placed || !trackingOk) return;
+    if (aimOnSurface) {
       autoPlace.current = false;
       place();
+      return;
     }
-  }, [loadState, aimOnSurface, placed]); // eslint-disable-line react-hooks/exhaustive-deps
+    const t = setTimeout(() => {
+      if (!autoPlace.current) return;
+      autoPlace.current = false;
+      setState({ placeFront: true });
+      place();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [loadState, aimOnSurface, placed, trackingOk]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const move = () => setState({ placed: false });
   const remove = () => setState({ modelId: null, modelUrl: null, placed: false });
 
   // ----- guidance text -----
   let guide = null;
-  if (!trackingOk || !surfaceFound) {
-    guide = 'Move your phone slowly to scan the floor';
+  if (!trackingOk) {
+    guide = 'Move your phone slowly to look around';
   } else if (selected && loadState === 'loading') {
     guide = `Loading ${selected.name}...`;
   } else if (selected && loadState === 'error') {
     guide = `Couldn't load ${selected.name}. Try another object.`;
   } else if (selected && !placed) {
-    guide = aimOnSurface ? 'Tap Place to anchor it here' : 'Point at the floor';
+    guide = aimOnSurface ? 'Tap Place to anchor it here' : 'Point at the floor, or tap Place to put it in front of you';
   } else if (selected && placed) {
     guide = 'Anchored. Walk around it';
+  } else if (!surfaceFound) {
+    guide = 'Move your phone slowly to scan the floor';
   } else {
     guide = 'Floor found. Swipe up to add an object';
   }
 
-  const canPlace = selected && loadState === 'ready' && !placed && aimOnSurface;
+  const canPlace = selected && loadState === 'ready' && !placed && trackingOk;
 
   return (
     <View style={styles.root}>
@@ -140,7 +199,10 @@ export default function App() {
 
       {/* guidance */}
       <View style={styles.topBar} pointerEvents="box-none">
-        <View style={styles.pill}>
+        <View style={[styles.pill, { flexDirection: 'row', alignItems: 'center' }]}>
+          {selected && loadState === 'loading' && (
+            <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />
+          )}
           <Text style={styles.pillText} numberOfLines={2}>
             {guide}
           </Text>
@@ -176,12 +238,17 @@ export default function App() {
         </View>
       )}
 
+      {/* floating YouTube player */}
+      {videoQuery && (
+        <VideoPanel query={videoQuery} onClose={() => setState({ videoQuery: null })} />
+      )}
+
       {/* swipe-up search sheet */}
       <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetY }] }]}>
         <View style={styles.sheetInner}>
           <View {...sheetPan.panHandlers} style={styles.handleArea}>
             <View style={styles.handle} />
-            {!sheetOpen && <Text style={styles.peekText}>Swipe up to add an object</Text>}
+            {!sheetOpen && <Text style={styles.peekText}>Swipe up to add an object or find a video</Text>}
           </View>
 
           <View style={styles.searchBox}>
@@ -190,12 +257,12 @@ export default function App() {
               value={query}
               onChangeText={setQuery}
               onFocus={() => animateSheet(true)}
-              placeholder="Search helmet, robot, fox, shoe..."
+              placeholder="Search objects or anything on YouTube"
               placeholderTextColor="rgba(255,255,255,0.5)"
               style={styles.searchInput}
               returnKeyType="search"
               autoCorrect={false}
-              onSubmitEditing={() => results[0] && pick(results[0])}
+              onSubmitEditing={submitSearch}
             />
             {query.length > 0 && (
               <TouchableOpacity onPress={() => setQuery('')} hitSlop={10}>
@@ -204,12 +271,55 @@ export default function App() {
             )}
           </View>
 
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chips}
+            contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {CATEGORIES.map((c) => (
+              <TouchableOpacity
+                key={c}
+                onPress={() => setCat(c)}
+                style={[styles.chip, cat === c && styles.chipOn]}
+              >
+                <Text style={[styles.chipText, cat === c && styles.chipTextOn]}>{c}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
           <FlatList
             data={results}
+            ListHeaderComponent={
+              query.trim().length > 1 ? (
+                <TouchableOpacity
+                  style={styles.row}
+                  onPress={() => {
+                    watch(query.trim());
+                    setQuery('');
+                    animateSheet(false);
+                  }}
+                  activeOpacity={0.6}
+                >
+                  <View style={[styles.rowIcon, { backgroundColor: '#ff0033' }]}>
+                    <Text style={styles.rowIconText}>▶</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowName} numberOfLines={1}>
+                      Watch "{query.trim()}"
+                    </Text>
+                    <Text style={styles.rowCat}>YouTube video, plays over your camera</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null
+            }
             keyExtractor={(i) => i.id}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ paddingBottom: 48 }}
-            ListEmptyComponent={<Text style={styles.empty}>Nothing matches "{query}"</Text>}
+            ListEmptyComponent={
+              <Text style={styles.empty}>No 3D object for "{query}" yet. Tap Watch to see it on YouTube.</Text>
+            }
             renderItem={({ item }) => (
               <TouchableOpacity style={styles.row} onPress={() => pick(item)} activeOpacity={0.6}>
                 <View style={styles.rowIcon}>
@@ -313,5 +423,10 @@ const styles = StyleSheet.create({
   rowName: { color: '#fff', fontSize: 16, fontWeight: '500' },
   rowCat: { color: 'rgba(255,255,255,0.55)', fontSize: 12, marginTop: 2 },
   rowDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#34c759' },
-  empty: { color: 'rgba(255,255,255,0.6)', textAlign: 'center', marginTop: 30 },
+  chips: { flexGrow: 0, marginBottom: 6 },
+  chip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)' },
+  chipOn: { backgroundColor: '#ffffff' },
+  chipText: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: '500' },
+  chipTextOn: { color: '#000' },
+  empty: { color: 'rgba(255,255,255,0.6)', textAlign: 'center', marginTop: 30, paddingHorizontal: 30 },
 });
