@@ -2,7 +2,7 @@
   "expo": {
     "name": "My View",
     "slug": "my-view",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
@@ -12,10 +12,12 @@
         "NSCameraUsageDescription": "My View uses your camera to place 3D objects in your room.",
         "UIBackgroundModes": [
           "audio"
-        ]
+        ],
+        "NSMicrophoneUsageDescription": "My View listens for your voice so you can use it hands free.",
+        "NSSpeechRecognitionUsageDescription": "My View turns what you say into actions, like showing a video or an object."
       },
       "icon": "./assets/icon.png",
-      "buildNumber": "2"
+      "buildNumber": "3"
     },
     "android": {
       "package": "com.rayees.arviewer"
@@ -37,13 +39,20 @@
           },
           "ios": {
             "cameraUsagePermission": "My View uses your camera to place 3D objects in your room.",
-            "microphoneUsagePermission": "My View does not record audio.",
+            "microphoneUsagePermission": "My View listens for your voice so you can use it hands free.",
             "photosPermission": "My View can read photos for AR experiences.",
             "savePhotosPermission": "My View can save screenshots of your AR scene."
           }
         }
       ],
-      "./plugins/withAppIntents"
+      "./plugins/withAppIntents",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "My View listens for your voice so you can use it hands free.",
+          "speechRecognitionPermission": "My View turns what you say into actions, like showing a video or an object."
+        }
+      ]
     ],
     "icon": "./assets/icon.png",
     "scheme": "myview"

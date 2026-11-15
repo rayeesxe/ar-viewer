@@ -8,5 +8,6 @@ module.exports = ({ config }) => ({
     sketchfabToken: process.env.SKETCHFAB_TOKEN || '',
     polyPizzaKey: process.env.POLYPIZZA_KEY || '',
     meshyKey: process.env.MESHY_KEY || '',
+    geminiKey: process.env.GEMINI_KEY || '',
   },
 });

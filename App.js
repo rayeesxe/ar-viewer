@@ -1,5 +1,6 @@
 // My View: fill your room with 3D objects and YouTube screens that stay where you put them.
-// Siri or search looks in our own storage first, then online 3D libraries, then YouTube.
+// Talk to it hands free. Gemini understands requests; our storage is searched first,
+// then online 3D libraries, then YouTube.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -21,9 +22,12 @@ import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
 import ARScene from './src/ARScene';
 import VideoEntity, { DEFAULT_SIZE } from './src/VideoEntity';
+import StepsEntity from './src/StepsEntity';
 import { CATALOG, CATEGORIES } from './src/catalog';
 import { toSearchQuery } from './src/youtube';
 import { findModel, markFailed } from './src/modelSearch';
+import { aiAvailable, understand, stepsFor } from './src/ai';
+import { useVoice, quickCommand, looksLikeRequest, voiceSupported } from './src/voice';
 import { pose, frontPoint, yawFacing } from './src/camera';
 import {
   getState,
@@ -36,6 +40,7 @@ import {
   clearRoom,
   toast,
   newId,
+  sendCommand,
 } from './src/store';
 
 LogBox.ignoreAllLogs(true);
@@ -47,15 +52,49 @@ const CLOSED_Y = SHEET_H - PEEK;
 const OPEN_Y = 0;
 
 const SUGGESTIONS = [
+  'show me how to make a sandwich',
   'pyramids of Giza',
-  'how to make a sandwich',
   'solar system',
   'T rex',
   'how to tie a tie',
   'Eiffel Tower',
-  'human heart',
-  'lofi music',
+  'how does the human heart work',
+  'lofi music to cook to',
 ];
+
+const isHowTo = (q) => /^(how|teach|show me how|learn|recipe|tutorial)|\b(recipe|tutorial|music|song|news|workout)\b/i.test(q);
+
+const rightOf = () => {
+  const f = pose.forward;
+  const len = Math.hypot(f[0], f[2]) || 1;
+  return [-f[2] / len, 0, f[0] / len];
+};
+
+// Put a step card just to the right of its video
+function placeSteps(video) {
+  if (!video || !video.pos || !video.steps || !video.steps.length) return;
+  const r = rightOf();
+  const off = (video.size || DEFAULT_SIZE) / 2 + 0.32;
+  const pos = [video.pos[0] + r[0] * off, video.pos[1], video.pos[2] + r[2] * off];
+  const existing = getState().entities.find((e) => e.kind === 'steps' && e.linkedTo === video.id);
+  if (existing) return updateEntity(existing.id, { pos, yaw: video.yaw });
+  setState({
+    entities: [
+      ...getState().entities,
+      {
+        id: newId(),
+        kind: 'steps',
+        status: 'placed',
+        linkedTo: video.id,
+        title: video.request || video.query,
+        steps: video.steps,
+        stepIdx: 0,
+        pos,
+        yaw: video.yaw,
+      },
+    ],
+  });
+}
 
 // Put a video screen at eye level in front of you, beside any screens already there
 function placeVideo(id) {
@@ -65,18 +104,17 @@ function placeVideo(id) {
   const size = (me && me.size) || DEFAULT_SIZE;
   let pos = fp.pos;
   const others = getState().entities.filter(
-    (e) => e.id !== id && e.kind === 'video' && e.status === 'placed' && e.pos
+    (e) => e.id !== id && e.linkedTo !== id && (e.kind === 'video' || e.kind === 'steps') && e.status === 'placed' && e.pos
   );
-  const f = pose.forward;
-  const len = Math.hypot(f[0], f[2]) || 1;
-  const right = [-f[2] / len, 0, f[0] / len];
-  const gap = size + 0.15;
-  for (let i = 0; i < 8 && others.some((o) => Math.hypot(o.pos[0] - pos[0], o.pos[2] - pos[2]) < gap * 0.8); i++) {
+  const right = rightOf();
+  const gap = size + 0.75;
+  for (let i = 0; i < 8 && others.some((o) => Math.hypot(o.pos[0] - pos[0], o.pos[2] - pos[2]) < gap * 0.7); i++) {
     const step = (i % 2 === 0 ? 1 : -1) * gap * (Math.floor(i / 2) + 1);
     pos = [fp.pos[0] + right[0] * step, fp.pos[1], fp.pos[2] + right[2] * step];
   }
   updateEntity(id, { status: 'placed', pos, yaw: yawFacing(pos), floating: true, size });
   setState({ soundId: id });
+  placeSteps(getState().entities.find((e) => e.id === id));
   return true;
 }
 
@@ -90,9 +128,8 @@ function bringHere(id) {
 // Another copy of an object, just to its right
 function duplicate(e) {
   if (!e || !e.pos) return;
-  const f = pose.forward;
-  const len = Math.hypot(f[0], f[2]) || 1;
-  const pos = [e.pos[0] - (f[2] / len) * 0.5, e.pos[1], e.pos[2] + (f[0] / len) * 0.5];
+  const r = rightOf();
+  const pos = [e.pos[0] + r[0] * 0.5, e.pos[1], e.pos[2] + r[2] * 0.5];
   const id = newId();
   setState({
     entities: [...getState().entities, { ...e, id, pos, yaw: yawFacing(pos) }],
@@ -105,6 +142,57 @@ const remember = (q) => {
   setState({ recents: r });
 };
 
+// Which item a voice command is about when you don't say
+function defaultTarget(name) {
+  const s = getState();
+  const placed = s.entities.filter((e) => e.status === 'placed');
+  if (/step/.test(name)) {
+    const st = placed.filter((e) => e.kind === 'steps');
+    return st.length ? st[st.length - 1] : null;
+  }
+  if (s.selectedId) return placed.find((e) => e.id === s.selectedId) || null;
+  const pendingVid = pendingEntity('video');
+  if (name === 'here' && pendingVid) return pendingVid;
+  const vids = placed.filter((e) => e.kind === 'video');
+  const sound = vids.find((e) => e.id === s.soundId);
+  if (sound) return sound;
+  if (vids.length) return vids[vids.length - 1];
+  return placed.length ? placed[placed.length - 1] : null;
+}
+
+function runCommand(name, targetId) {
+  if (name === 'clear') {
+    clearRoom();
+    toast('Room cleared');
+    return;
+  }
+  if (name === 'here') {
+    // "place it": finish placing whatever is waiting
+    const pm = pendingEntity('model');
+    if (pm && getState().pendingLoad === 'ready') return setState({ placeNonce: getState().placeNonce + 1 });
+    const pv = pendingEntity('video');
+    if (pv) return placeVideo(pv.id);
+  }
+  const s = getState();
+  const t = (targetId && s.entities.find((e) => e.id === targetId)) || defaultTarget(name);
+  if (!t) return toast('Nothing to control yet');
+  if (t.kind === 'steps') {
+    const i = (t.stepIdx || 0) + (name === 'previous_step' ? -1 : 1);
+    updateEntity(t.id, { stepIdx: Math.max(0, Math.min(t.steps.length - 1, i)) });
+    return;
+  }
+  if (t.kind === 'video') {
+    if (name === 'here') return placeVideo(t.id);
+    if (name === 'next_step' || name === 'previous_step') return;
+    return sendCommand(t.id, name);
+  }
+  // 3D objects
+  if (name === 'here') bringHere(t.id);
+  else if (name === 'remove') removeEntity(t.id);
+  else if (name === 'bigger') updateEntity(t.id, { boost: (t.boost || 1) * 1.3 });
+  else if (name === 'smaller') updateEntity(t.id, { boost: (t.boost || 1) * 0.75 });
+}
+
 export default function App() {
   const entities = useStore((s) => s.entities);
   const selectedId = useStore((s) => s.selectedId);
@@ -116,19 +204,23 @@ export default function App() {
   const searchLog = useStore((s) => s.searchLog);
   const toastMsg = useStore((s) => s.toast);
   const recents = useStore((s) => s.recents);
+  const listening = useStore((s) => s.listening);
+  const voiceState = useStore((s) => s.voiceState);
+  const heard = useStore((s) => s.heard);
 
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('All');
   const [sheetOpen, setSheetOpen] = useState(false);
   const searchId = useRef(0);
-  const autoId = useRef(null); // the item Siri asked for: place it without waiting for a tap
+  const autoIds = useRef(new Set()); // things Siri or your voice asked for: place without a tap
   const retry = useRef(null); // online model that failed to load: try the next match
 
-  const pending = entities.find((e) => e.status === 'pending') || null;
-  const pendingModel = pending && pending.kind === 'model' ? pending : null;
+  const pendingModel = entities.find((e) => e.status === 'pending' && e.kind === 'model') || null;
+  const pendingVideo = entities.find((e) => e.status === 'pending' && e.kind === 'video') || null;
   const selected = entities.find((e) => e.id === selectedId) || null;
-  const placed = entities.filter((e) => e.status === 'placed');
+  const placed = entities.filter((e) => e.status === 'placed' && e.kind !== 'steps');
   const videos = entities.filter((e) => e.kind === 'video');
+  const stepCards = entities.filter((e) => e.kind === 'steps');
 
   // ----- swipe-up sheet -----
   const sheetY = useRef(new Animated.Value(CLOSED_Y)).current;
@@ -166,25 +258,48 @@ export default function App() {
   }, [query, cat]);
 
   // ----- adding things -----
-  const addModel = (item, auto) => {
+  const addModel = (item, auto, sizeM) => {
     searchId.current++;
-    const id = addPending({ kind: 'model', url: item.url, name: item.name, credit: item.credit || null });
-    autoId.current = auto ? id : null;
+    const id = addPending({
+      kind: 'model',
+      url: item.url,
+      name: item.name,
+      credit: item.credit || null,
+      sizeM: sizeM || null,
+    });
+    if (auto) autoIds.current.add(id);
     animateSheet(false);
     return id;
   };
 
-  const addVideo = (q, auto) => {
-    remember(q);
-    const id = addPending({ kind: 'video', query: toSearchQuery(q) });
-    autoId.current = auto ? id : null;
+  const addVideo = (q, auto, opts = {}) => {
+    remember(opts.request || q);
+    const id = addPending({
+      kind: 'video',
+      query: opts.exact ? q : toSearchQuery(q),
+      request: opts.request || q,
+      steps: opts.steps || null,
+    });
     animateSheet(false);
-    if (auto && getState().trackingOk && placeVideo(id)) autoId.current = null;
+    if (auto) {
+      if (getState().trackingOk && placeVideo(id)) {
+        // placed straight away
+      } else autoIds.current.add(id);
+    }
+    // a how-to without steps yet: ask AI for a step card in the background
+    if (!opts.steps && aiAvailable() && isHowTo(opts.request || q)) {
+      stepsFor(opts.request || q).then((steps) => {
+        const v = getState().entities.find((e) => e.id === id);
+        if (!v || !steps || !steps.length) return;
+        updateEntity(id, { steps });
+        if (v.status === 'placed') placeSteps({ ...v, steps });
+      });
+    }
     return id;
   };
 
   // Our storage first (catalog), then online 3D libraries, then a YouTube screen
-  const showAnything = async (q, auto) => {
+  const showAnything = async (q, auto, sizeM) => {
     const norm = q
       .toLowerCase()
       .replace(/[^a-z0-9 ]/g, ' ')
@@ -198,7 +313,7 @@ export default function App() {
         c.name.toLowerCase().endsWith(' ' + norm)
     );
     remember(q);
-    if (local) return addModel(local, auto);
+    if (local) return addModel(local, auto, sizeM);
     const sid = ++searchId.current;
     animateSheet(false);
     setState({ searchStatus: `Looking for ${q}` });
@@ -209,18 +324,62 @@ export default function App() {
       toast(`No 3D model of "${q}" found, here is a video instead`);
       return addVideo(q, auto);
     }
-    retry.current = { q, auto, key: model.key, tries: retry.current && retry.current.q === q ? retry.current.tries : 0 };
-    const id = addPending({ kind: 'model', url: model.url, name: model.name, credit: model.credit, remote: true });
-    autoId.current = auto ? id : null;
+    retry.current = { q, auto, sizeM, key: model.key, tries: retry.current && retry.current.q === q ? retry.current.tries : 0 };
+    const id = addPending({ kind: 'model', url: model.url, name: model.name, credit: model.credit, remote: true, sizeM: sizeM || null });
+    if (auto) autoIds.current.add(id);
+  };
+
+  // Anything you say or type
+  const handleRequest = async (text, { auto = true, fromVoice = false } = {}) => {
+    const q = (text || '').trim();
+    if (!q) return;
+    const qc = quickCommand(q);
+    if (qc) return runCommand(qc);
+    if (fromVoice && !looksLikeRequest(q)) return; // background talk or a video speaking
+
+    if (aiAvailable()) {
+      setState({ searchStatus: 'Thinking...' });
+      const room = getState().entities.filter((e) => e.status === 'placed' && e.kind !== 'steps');
+      const intent = await understand(q, room);
+      setState({ searchStatus: null });
+      if (intent) {
+        const a = intent.action;
+        if (a === 'none') return fromVoice ? null : toast(`Not sure what to do with "${q}"`);
+        if (a === 'command' && intent.command) return runCommand(intent.command, intent.target);
+        const steps = Array.isArray(intent.steps) && intent.steps.length ? intent.steps.slice(0, 8) : null;
+        if (a === 'video' || a === 'both') {
+          addVideo(intent.video_query || q, auto, { request: q, steps, exact: !!intent.video_query });
+        }
+        if (a === 'object' || a === 'both') {
+          showAnything(intent.object || q, auto, Number(intent.size_m) || null);
+        }
+        return;
+      }
+    }
+    // no AI: simple rules
+    if (isHowTo(q)) return addVideo(q, auto);
+    showAnything(q, auto);
   };
 
   const submitSearch = () => {
     const q = query.trim();
     if (!q) return;
     setQuery('');
-    if (/^how\b/i.test(q)) return addVideo(q, false);
-    showAnything(q, false);
+    handleRequest(q, { auto: false });
   };
+
+  // ----- hands-free voice -----
+  const heardTimer = useRef(null);
+  useVoice(
+    listening,
+    (text, final) => {
+      setState({ heard: text });
+      clearTimeout(heardTimer.current);
+      heardTimer.current = setTimeout(() => setState({ heard: '' }), final ? 2500 : 4000);
+      if (final) handleRequest(text, { auto: true, fromVoice: true });
+    },
+    (st) => setState({ voiceState: st })
+  );
 
   // An online model that won't load on this phone: quietly try the next match
   useEffect(() => {
@@ -235,26 +394,20 @@ export default function App() {
       return;
     }
     r.tries += 1;
-    showAnything(r.q, r.auto);
+    showAnything(r.q, r.auto, r.sizeM);
   }, [pendingLoad]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const place = () => {
-    if (pending && pending.kind === 'video') return placeVideo(pending.id);
-    setState({ placeNonce: getState().placeNonce + 1 });
-  };
+  const place = () => setState({ placeNonce: getState().placeNonce + 1 });
 
   // ----- Siri -----
   // myview://show/<thing>    "Hey Siri, show me the pyramids of Giza in My View"
   // myview://watch/<words>   "Hey Siri, show me how to make a sandwich in My View"
   // myview://search/<words>  "Hey Siri, search My View" -> anything
+  // myview://clear           "Hey Siri, clear My View"
   useEffect(() => {
     const handle = (url) => {
       if (!url) return;
-      if (/myview:\/\/clear/i.test(url)) {
-        clearRoom();
-        toast('Room cleared');
-        return;
-      }
+      if (/myview:\/\/clear/i.test(url)) return runCommand('clear');
       const m = url.match(/myview:\/\/(show|watch|search)\/(.+)$/i);
       if (!m) return;
       const kind = m[1].toLowerCase();
@@ -263,42 +416,39 @@ export default function App() {
         arg = decodeURIComponent(arg.replace(/\+/g, ' '));
       } catch (e) {}
       arg = arg.trim();
+      setState({ listening: true });
       if (kind === 'show') {
         const item = CATALOG.find((c) => c.id === arg.toLowerCase());
-        if (item) addModel(item, true);
-        else showAnything(arg, true);
-      } else if (kind === 'watch' || /^how\b/i.test(arg)) {
-        addVideo(arg, true);
-      } else {
-        showAnything(arg, true);
+        if (item) return addModel(item, true);
+        return handleRequest(`show me ${arg}`, { auto: true });
       }
+      handleRequest(arg, { auto: true });
     };
     Linking.getInitialURL().then(handle).catch(() => {});
     const sub = Linking.addEventListener('url', (e) => handle(e.url));
     return () => sub.remove();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Siri items: place as soon as the room is tracked (on the floor you point at, or in front of you)
+  // Things you asked for by voice or Siri: place as soon as the room is tracked
   useEffect(() => {
-    const p = pendingEntity();
-    if (!p || autoId.current !== p.id || !trackingOk) return undefined;
-    if (p.kind === 'video') {
-      if (placeVideo(p.id)) autoId.current = null;
-      return undefined;
+    if (!trackingOk) return undefined;
+    if (pendingVideo && autoIds.current.has(pendingVideo.id) && placeVideo(pendingVideo.id)) {
+      autoIds.current.delete(pendingVideo.id);
     }
-    if (pendingLoad !== 'ready') return undefined;
+    if (!pendingModel || !autoIds.current.has(pendingModel.id) || pendingLoad !== 'ready') return undefined;
+    const id = pendingModel.id;
     if (aimOnSurface) {
-      autoId.current = null;
+      autoIds.current.delete(id);
       place();
       return undefined;
     }
     const t = setTimeout(() => {
-      if (autoId.current !== p.id) return;
-      autoId.current = null;
+      if (!autoIds.current.has(id)) return;
+      autoIds.current.delete(id);
       place();
     }, 1200);
     return () => clearTimeout(t);
-  }, [pending && pending.id, pendingLoad, aimOnSurface, trackingOk]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pendingModel && pendingModel.id, pendingVideo && pendingVideo.id, pendingLoad, aimOnSurface, trackingOk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- guidance text -----
   let guide;
@@ -306,16 +456,17 @@ export default function App() {
   else if (!trackingOk) guide = 'Move your phone slowly to look around';
   else if (pendingModel && pendingLoad === 'loading') guide = `Loading ${pendingModel.name}...`;
   else if (pendingModel && pendingLoad === 'error') guide = `Couldn't load ${pendingModel.name}`;
-  else if (pendingModel) guide = aimOnSurface ? 'Tap Place to put it here' : 'Point at the floor, or tap Place to put it in front of you';
-  else if (pending && pending.kind === 'video') guide = 'Face where you want the screen, then tap Place in room';
+  else if (pendingModel) guide = aimOnSurface ? 'Tap Place, or say "place it"' : 'Point at the floor, or tap Place to put it in front of you';
+  else if (pendingVideo) guide = 'Face where you want the screen, then say "place it"';
   else if (selected) guide = `${selected.name || 'Object'} selected`;
-  else if (placed.length) guide = 'Walk around. Swipe up to add more';
+  else if (placed.length) guide = 'Walk around. Say what you want to add';
   else if (!surfaceFound) guide = 'Move your phone slowly to scan the floor';
-  else guide = 'Swipe up, or ask Siri, to add something';
+  else guide = listening && voiceState === 'listening' ? 'Say "show me..." or swipe up' : 'Swipe up, or ask Siri, to add something';
 
   const busy = !!searchStatus || (pendingModel && pendingLoad === 'loading');
   const canPlace = pendingModel && pendingLoad === 'ready' && trackingOk;
   const credit = (pendingModel && pendingModel.credit) || (selected && selected.credit);
+  const micOn = listening && voiceState === 'listening';
 
   return (
     <View style={styles.root}>
@@ -330,7 +481,10 @@ export default function App() {
         shadowsEnabled
       />
 
-      {/* YouTube screens pinned in the room (drawn under the controls) */}
+      {/* step cards and YouTube screens pinned in the room (drawn under the controls) */}
+      {stepCards.map((e) => (
+        <StepsEntity key={e.id} entity={e} />
+      ))}
       {videos.map((e) => (
         <VideoEntity key={e.id} entity={e} onPlace={() => placeVideo(e.id)} />
       ))}
@@ -351,9 +505,29 @@ export default function App() {
         )}
       </View>
 
+      {/* live caption of what you are saying */}
+      {!!heard && (
+        <View style={[styles.caption, { bottom: PEEK + (pendingModel || selected ? 130 : 24) }]} pointerEvents="none">
+          <Text style={styles.captionText} numberOfLines={2}>
+            {heard}
+          </Text>
+        </View>
+      )}
+
+      {/* microphone: hands-free listening on/off */}
+      {voiceSupported() && (
+        <TouchableOpacity
+          style={[styles.mic, micOn && styles.micOn, { bottom: PEEK + 22 }]}
+          onPress={() => setState({ listening: !listening })}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.micText, micOn && { color: '#000' }]}>{micOn ? 'Listening' : voiceState === 'denied' ? 'Mic off' : 'Mic'}</Text>
+        </TouchableOpacity>
+      )}
+
       {/* placing a 3D object */}
       {pendingModel && (
-        <View style={[styles.actions, { bottom: PEEK + 22 }]} pointerEvents="box-none">
+        <View style={[styles.actions, { bottom: PEEK + 70 }]} pointerEvents="box-none">
           <TouchableOpacity style={styles.actionBtn} onPress={() => removeEntity(pendingModel.id)}>
             <Text style={styles.actionText}>Cancel</Text>
           </TouchableOpacity>
@@ -373,7 +547,7 @@ export default function App() {
 
       {/* an object you tapped */}
       {selected && !pendingModel && (
-        <View style={[styles.actions, { bottom: PEEK + 22, gap: 8 }]} pointerEvents="box-none">
+        <View style={[styles.actions, { bottom: PEEK + 70, gap: 8 }]} pointerEvents="box-none">
           <TouchableOpacity style={styles.actionBtn} onPress={() => removeEntity(selected.id)}>
             <Text style={styles.actionText}>Remove</Text>
           </TouchableOpacity>
@@ -389,7 +563,7 @@ export default function App() {
         </View>
       )}
       {selected && !pendingModel && (
-        <Text style={[styles.hint, { bottom: PEEK + 80 }]}>Drag to move · Pinch to resize · Twist to rotate</Text>
+        <Text style={[styles.hint, { bottom: PEEK + 126 }]}>Drag to move · Pinch to resize · Twist to rotate</Text>
       )}
 
       {/* swipe-up sheet */}
@@ -401,7 +575,7 @@ export default function App() {
               <Text style={styles.peekText}>
                 {placed.length
                   ? `${placed.length} in your room · swipe up to add more`
-                  : 'Swipe up to add objects or videos'}
+                  : 'Swipe up, or just say what you want to see'}
               </Text>
             )}
           </View>
@@ -412,7 +586,7 @@ export default function App() {
               value={query}
               onChangeText={setQuery}
               onFocus={() => animateSheet(true)}
-              placeholder="Search anything: pyramids, how to make pasta..."
+              placeholder="Anything: pyramids, how to make pasta..."
               placeholderTextColor="rgba(255,255,255,0.5)"
               style={styles.searchInput}
               returnKeyType="search"
@@ -449,6 +623,24 @@ export default function App() {
               <View>
                 {query.trim().length > 1 && (
                   <>
+                    <TouchableOpacity
+                      style={styles.row}
+                      onPress={() => {
+                        const q = query.trim();
+                        setQuery('');
+                        handleRequest(q, { auto: false });
+                      }}
+                    >
+                      <View style={[styles.rowIcon, { backgroundColor: '#7a4dff' }]}>
+                        <Text style={styles.rowIconText}>AI</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.rowName} numberOfLines={1}>
+                          "{query.trim()}"
+                        </Text>
+                        <Text style={styles.rowCat}>Let My View work out the best thing to show</Text>
+                      </View>
+                    </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.row}
                       onPress={() => {
@@ -496,11 +688,7 @@ export default function App() {
                     keyboardShouldPersistTaps="handled"
                   >
                     {[...(recents || []), ...SUGGESTIONS.filter((x) => !(recents || []).includes(x))].map((q) => (
-                      <TouchableOpacity
-                        key={q}
-                        style={styles.suggest}
-                        onPress={() => (/^how\b/i.test(q) || /music/i.test(q) ? addVideo(q, true) : showAnything(q, true))}
-                      >
+                      <TouchableOpacity key={q} style={styles.suggest} onPress={() => handleRequest(q, { auto: true })}>
                         <Text style={styles.suggestText}>
                           {(recents || []).includes(q) ? '↺ ' : ''}
                           {q}
@@ -522,7 +710,7 @@ export default function App() {
                       <View key={e.id} style={styles.roomRow}>
                         <Text style={styles.roomKind}>{e.kind === 'video' ? '▶' : '◆'}</Text>
                         <Text style={styles.roomName} numberOfLines={1}>
-                          {e.kind === 'video' ? e.query : e.name}
+                          {e.kind === 'video' ? e.request || e.query : e.name}
                         </Text>
                         <TouchableOpacity onPress={() => removeEntity(e.id)} hitSlop={8}>
                           <Text style={styles.clearText}>Remove</Text>
@@ -532,10 +720,18 @@ export default function App() {
                   </View>
                 )}
 
+                {!query && (
+                  <Text style={styles.voiceHelp}>
+                    {aiAvailable()
+                      ? 'Just talk: "show me how to make pancakes", "put it here", "bigger", "pause", "next step", "show me a T rex".'
+                      : 'Say "show me ..." or "how to ...", or use "pause", "bigger", "next step".'}
+                  </Text>
+                )}
+
                 {!query && <Text style={styles.sectionTitleSolo}>Objects</Text>}
               </View>
             }
-            ListEmptyComponent={<Text style={styles.empty}>Not in our storage yet. Tap Find in 3D or add a video above.</Text>}
+            ListEmptyComponent={<Text style={styles.empty}>Not in our storage yet. Use the options above.</Text>}
             ListFooterComponent={searchLog ? <Text style={styles.log}>Last online search: {searchLog}</Text> : null}
             renderItem={({ item }) => (
               <TouchableOpacity style={styles.row} onPress={() => addModel(item, false)} activeOpacity={0.6}>
@@ -685,6 +881,36 @@ const styles = StyleSheet.create({
   roomRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10 },
   roomKind: { color: 'rgba(255,255,255,0.7)', fontSize: 12, width: 14 },
   roomName: { flex: 1, color: '#fff', fontSize: 14 },
+  caption: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    alignItems: 'center',
+  },
+  captionText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '500',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  mic: {
+    position: 'absolute',
+    right: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: 'rgba(18,18,20,0.74)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  micOn: { backgroundColor: '#ffffff' },
+  micText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  voiceHelp: { color: 'rgba(255,255,255,0.55)', fontSize: 12, marginHorizontal: 18, marginTop: 4, marginBottom: 8 },
   suggest: {
     paddingHorizontal: 12,
     paddingVertical: 8,
