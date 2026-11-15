@@ -58,6 +58,8 @@ export default function ARScene() {
   const [spin, setSpin] = useState(0);
 
   const reticleRef = useRef(null);
+  const floorYRef = useRef(null); // height of the floor once ARKit has seen it
+  const [floating, setFloating] = useState(false);
   const camRef = useRef(null);
   const lastHit = useRef(0);
   const objRef = useRef(null);
@@ -72,6 +74,7 @@ export default function ARScene() {
     setAnchorPos(null);
     setUserScale(1);
     setSpin(0);
+    setFloating(false);
     setState({ placed: false, loadState: modelUrl ? 'loading' : 'idle' });
   }, [modelUrl]);
 
@@ -80,19 +83,33 @@ export default function ARScene() {
     if (!placed) setAnchorPos(null);
   }, [placed]);
 
-  // "Place" pressed in the UI: anchor the object on the floor where the ring is
+  // "Place" pressed (or Siri asked): anchor the object
   useEffect(() => {
-    if (!placeNonce) return;
-    const p = reticleRef.current;
-    if (!p || !fit) return;
-    const cam = camRef.current && camRef.current.position;
-    if (cam) {
-      // turn the object to face you
-      setYaw((Math.atan2(cam[0] - p[0], cam[2] - p[2]) * 180) / Math.PI);
+    if (!placeNonce || !fit) return;
+    const cam = camRef.current;
+    let p = reticleRef.current;
+    let onFloor = !!p;
+    if (getState().placeFront || !p) {
+      // Siri: put it about a metre in front of you, on the floor if we know where it is
+      if (!cam || !cam.position) return;
+      const f = cam.forward || [0, 0, -1];
+      const len = Math.hypot(f[0], f[2]) || 1;
+      const fx = f[0] / len;
+      const fz = f[2] / len;
+      const d = 1.0;
+      const floorY = floorYRef.current;
+      onFloor = floorY != null && cam.position[1] - floorY < 2.2 && cam.position[1] - floorY > 0.3;
+      const y = onFloor ? floorY : cam.position[1] - 0.45;
+      p = [cam.position[0] + fx * d, y, cam.position[2] + fz * d];
     }
+    if (cam && cam.position) {
+      // turn the object to face you
+      setYaw((Math.atan2(cam.position[0] - p[0], cam.position[2] - p[2]) * 180) / Math.PI);
+    }
+    setFloating(!onFloor);
     setAnchorPos(p);
     dragPos.current = p;
-    setState({ placed: true });
+    setState({ placed: true, placeFront: false });
   }, [placeNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Every frame ARKit reports what is at the centre of the screen
@@ -111,6 +128,7 @@ export default function ARScene() {
     }
     const pos = hit.transform.position;
     reticleRef.current = pos;
+    if (floorYRef.current == null || pos[1] < floorYRef.current) floorYRef.current = pos[1];
     setState({ surfaceFound: true, aimOnSurface: true });
     const now = Date.now();
     if (now - lastHit.current > 50 && (!reticle || dist(pos, reticle) > 0.004)) {
@@ -188,7 +206,7 @@ export default function ARScene() {
     nodePos = reticle; // "ghost" preview following the ring
     opacity = 0.55;
   }
-  const showShadow = fit && opacity > 0;
+  const showShadow = fit && opacity > 0 && !(placed && floating);
   const shadowSize = fit ? Math.max(0.2, fit.foot * 1.6) : 1;
 
   return (

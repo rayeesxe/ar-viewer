@@ -7,6 +7,10 @@ let state = {
   modelUrl: null,
   placeNonce: 0, // increments when the user taps "Place"
   placed: false,
+  placeFront: false, // Siri: place in front of you even if no floor is in view
+  videoQuery: null, // what the floating YouTube panel is showing
+  remote: null, // { name, credit } for a model found online
+  searchStatus: null, // e.g. 'Searching Sketchfab' while looking online
 
   // scene -> UI
   trackingOk: false, // ARKit is tracking the room normally
