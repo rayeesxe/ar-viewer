@@ -20,7 +20,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
 import ARScene from './src/ARScene';
-import VideoEntity from './src/VideoEntity';
+import VideoEntity, { DEFAULT_SIZE } from './src/VideoEntity';
 import { CATALOG, CATEGORIES } from './src/catalog';
 import { toSearchQuery } from './src/youtube';
 import { findModel, markFailed } from './src/modelSearch';
@@ -35,6 +35,7 @@ import {
   removeEntity,
   clearRoom,
   toast,
+  newId,
 } from './src/store';
 
 LogBox.ignoreAllLogs(true);
@@ -45,23 +46,64 @@ const PEEK = 92;
 const CLOSED_Y = SHEET_H - PEEK;
 const OPEN_Y = 0;
 
+const SUGGESTIONS = [
+  'pyramids of Giza',
+  'how to make a sandwich',
+  'solar system',
+  'T rex',
+  'how to tie a tie',
+  'Eiffel Tower',
+  'human heart',
+  'lofi music',
+];
+
 // Put a video screen at eye level in front of you, beside any screens already there
 function placeVideo(id) {
-  const fp = frontPoint(1.3, 'eye');
+  const fp = frontPoint(1.6, 'eye');
   if (!fp) return false;
+  const me = getState().entities.find((e) => e.id === id);
+  const size = (me && me.size) || DEFAULT_SIZE;
   let pos = fp.pos;
-  const others = getState().entities.filter((e) => e.kind === 'video' && e.status === 'placed' && e.pos);
+  const others = getState().entities.filter(
+    (e) => e.id !== id && e.kind === 'video' && e.status === 'placed' && e.pos
+  );
   const f = pose.forward;
   const len = Math.hypot(f[0], f[2]) || 1;
   const right = [-f[2] / len, 0, f[0] / len];
-  for (let i = 0; i < 6 && others.some((o) => Math.hypot(o.pos[0] - pos[0], o.pos[2] - pos[2]) < 0.6); i++) {
-    const step = (i % 2 === 0 ? 1 : -1) * 0.75 * (Math.floor(i / 2) + 1);
+  const gap = size + 0.15;
+  for (let i = 0; i < 8 && others.some((o) => Math.hypot(o.pos[0] - pos[0], o.pos[2] - pos[2]) < gap * 0.8); i++) {
+    const step = (i % 2 === 0 ? 1 : -1) * gap * (Math.floor(i / 2) + 1);
     pos = [fp.pos[0] + right[0] * step, fp.pos[1], fp.pos[2] + right[2] * step];
   }
-  updateEntity(id, { status: 'placed', pos, yaw: yawFacing(pos), floating: true });
+  updateEntity(id, { status: 'placed', pos, yaw: yawFacing(pos), floating: true, size });
   setState({ soundId: id });
   return true;
 }
+
+// Bring a placed object to about a metre in front of you
+function bringHere(id) {
+  const fp = frontPoint(1.0);
+  if (!fp) return;
+  updateEntity(id, { pos: fp.pos, yaw: yawFacing(fp.pos), floating: fp.floating });
+}
+
+// Another copy of an object, just to its right
+function duplicate(e) {
+  if (!e || !e.pos) return;
+  const f = pose.forward;
+  const len = Math.hypot(f[0], f[2]) || 1;
+  const pos = [e.pos[0] - (f[2] / len) * 0.5, e.pos[1], e.pos[2] + (f[0] / len) * 0.5];
+  const id = newId();
+  setState({
+    entities: [...getState().entities, { ...e, id, pos, yaw: yawFacing(pos) }],
+    selectedId: id,
+  });
+}
+
+const remember = (q) => {
+  const r = [q, ...(getState().recents || []).filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, 8);
+  setState({ recents: r });
+};
 
 export default function App() {
   const entities = useStore((s) => s.entities);
@@ -73,6 +115,7 @@ export default function App() {
   const searchStatus = useStore((s) => s.searchStatus);
   const searchLog = useStore((s) => s.searchLog);
   const toastMsg = useStore((s) => s.toast);
+  const recents = useStore((s) => s.recents);
 
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('All');
@@ -132,6 +175,7 @@ export default function App() {
   };
 
   const addVideo = (q, auto) => {
+    remember(q);
     const id = addPending({ kind: 'video', query: toSearchQuery(q) });
     autoId.current = auto ? id : null;
     animateSheet(false);
@@ -153,6 +197,7 @@ export default function App() {
         c.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim() === norm ||
         c.name.toLowerCase().endsWith(' ' + norm)
     );
+    remember(q);
     if (local) return addModel(local, auto);
     const sid = ++searchId.current;
     animateSheet(false);
@@ -205,6 +250,11 @@ export default function App() {
   useEffect(() => {
     const handle = (url) => {
       if (!url) return;
+      if (/myview:\/\/clear/i.test(url)) {
+        clearRoom();
+        toast('Room cleared');
+        return;
+      }
       const m = url.match(/myview:\/\/(show|watch|search)\/(.+)$/i);
       if (!m) return;
       const kind = m[1].toLowerCase();
@@ -280,7 +330,7 @@ export default function App() {
         shadowsEnabled
       />
 
-      {/* YouTube screens pinned in the room */}
+      {/* YouTube screens pinned in the room (drawn under the controls) */}
       {videos.map((e) => (
         <VideoEntity key={e.id} entity={e} onPlace={() => placeVideo(e.id)} />
       ))}
@@ -323,9 +373,15 @@ export default function App() {
 
       {/* an object you tapped */}
       {selected && !pendingModel && (
-        <View style={[styles.actions, { bottom: PEEK + 22 }]} pointerEvents="box-none">
+        <View style={[styles.actions, { bottom: PEEK + 22, gap: 8 }]} pointerEvents="box-none">
           <TouchableOpacity style={styles.actionBtn} onPress={() => removeEntity(selected.id)}>
             <Text style={styles.actionText}>Remove</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => duplicate(selected)}>
+            <Text style={styles.actionText}>Copy</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => bringHere(selected.id)}>
+            <Text style={styles.actionText}>Here</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionBtn} onPress={() => setState({ selectedId: null })}>
             <Text style={styles.actionText}>Done</Text>
@@ -430,6 +486,28 @@ export default function App() {
                       </View>
                     </TouchableOpacity>
                   </>
+                )}
+
+                {!query && (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingVertical: 6 }}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {[...(recents || []), ...SUGGESTIONS.filter((x) => !(recents || []).includes(x))].map((q) => (
+                      <TouchableOpacity
+                        key={q}
+                        style={styles.suggest}
+                        onPress={() => (/^how\b/i.test(q) || /music/i.test(q) ? addVideo(q, true) : showAnything(q, true))}
+                      >
+                        <Text style={styles.suggestText}>
+                          {(recents || []).includes(q) ? '↺ ' : ''}
+                          {q}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
                 )}
 
                 {placed.length > 0 && !query && (
@@ -607,6 +685,14 @@ const styles = StyleSheet.create({
   roomRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10 },
   roomKind: { color: 'rgba(255,255,255,0.7)', fontSize: 12, width: 14 },
   roomName: { flex: 1, color: '#fff', fontSize: 14 },
+  suggest: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  suggestText: { color: '#fff', fontSize: 13 },
   empty: { color: 'rgba(255,255,255,0.6)', textAlign: 'center', marginTop: 30, paddingHorizontal: 30 },
   log: { color: 'rgba(255,255,255,0.4)', fontSize: 10, marginHorizontal: 18, marginTop: 14 },
 });
