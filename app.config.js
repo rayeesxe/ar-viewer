@@ -1,6 +1,12 @@
-// Adds the optional YouTube Data API key (GitHub secret YOUTUBE_API_KEY) at build time.
-// Without a key the app still finds videos through YouTube's public results page.
+// Adds optional service keys at build time from GitHub secrets.
+// Each online feature switches on when its key is present; the app works without them.
 module.exports = ({ config }) => ({
   ...config,
-  extra: { ...(config.extra || {}), youtubeKey: process.env.YOUTUBE_API_KEY || '' },
+  extra: {
+    ...(config.extra || {}),
+    youtubeKey: process.env.YOUTUBE_API_KEY || '',
+    sketchfabToken: process.env.SKETCHFAB_TOKEN || '',
+    polyPizzaKey: process.env.POLYPIZZA_KEY || '',
+    meshyKey: process.env.MESHY_KEY || '',
+  },
 });

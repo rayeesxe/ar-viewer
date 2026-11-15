@@ -19,9 +19,10 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
 import ARScene from './src/ARScene';
-import { CATALOG, CATEGORIES, matchObject } from './src/catalog';
+import { CATALOG, CATEGORIES } from './src/catalog';
 import VideoPanel from './src/VideoPanel';
 import { toSearchQuery } from './src/youtube';
+import { findModel } from './src/modelSearch';
 import { getState, setState, useStore } from './src/store';
 
 LogBox.ignoreAllLogs(true);
@@ -40,11 +41,14 @@ export default function App() {
   const aimOnSurface = useStore((s) => s.aimOnSurface);
   const loadState = useStore((s) => s.loadState);
   const videoQuery = useStore((s) => s.videoQuery);
+  const remote = useStore((s) => s.remote);
+  const searchStatus = useStore((s) => s.searchStatus);
   const [cat, setCat] = useState('All');
 
   const [query, setQuery] = useState('');
   const [sheetOpen, setSheetOpen] = useState(false);
-  const selected = CATALOG.find((c) => c.id === modelId) || null;
+  const selected =
+    CATALOG.find((c) => c.id === modelId) || (modelId === 'remote' && remote) || null;
 
   // ----- swipe-up sheet -----
   const sheetY = useRef(new Animated.Value(CLOSED_Y)).current;
@@ -83,7 +87,7 @@ export default function App() {
 
   // ----- actions -----
   const pick = (item) => {
-    setState({ modelId: item.id, modelUrl: item.url, placed: false });
+    setState({ modelId: item.id, modelUrl: item.url, placed: false, remote: null });
     animateSheet(false);
   };
   const place = () =>
@@ -94,14 +98,39 @@ export default function App() {
 
   const watch = (q) => setState({ videoQuery: toSearchQuery(q) });
 
+  // Anything at all: our catalog first, then online 3D libraries, then AI, then YouTube
+  const searchId = useRef(0);
+  const showAnything = async (q, auto) => {
+    const norm = q.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\b(a|an|the|some|me|show|please)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    const local = CATALOG.find(
+      (c) => c.id === norm || c.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim() === norm || c.name.toLowerCase().endsWith(' ' + norm)
+    );
+    if (local) return auto ? summon(local) : pick(local);
+    const id = ++searchId.current;
+    animateSheet(false);
+    setState({ searchStatus: `Looking for ${q}` });
+    const found = await findModel(q, (st) =>
+      searchId.current === id && setState({ searchStatus: `${st}...` })
+    );
+    if (searchId.current !== id) return;
+    setState({ searchStatus: null });
+    if (!found) return watch(q);
+    autoPlace.current = !!auto;
+    setState({
+      modelId: 'remote',
+      modelUrl: found.url,
+      placed: false,
+      remote: { id: 'remote', name: found.name, credit: found.credit },
+    });
+  };
+
   // Typed search with no matching object: look it up on YouTube instead
   const submitSearch = () => {
     const q = query.trim();
     if (!q) return;
     if (results[0]) return pick(results[0]);
-    watch(q);
     setQuery('');
-    animateSheet(false);
+    showAnything(q, true);
   };
 
   // ----- Siri -----
@@ -126,17 +155,16 @@ export default function App() {
       } catch (e) {}
       arg = arg.trim();
       if (kind === 'show') {
-        const item = CATALOG.find((c) => c.id === arg.toLowerCase()) || matchObject(arg);
+        const item = CATALOG.find((c) => c.id === arg.toLowerCase());
         if (item) summon(item);
-        else watch(arg);
+        else showAnything(arg, true);
       } else if (kind === 'watch') {
         watch(arg);
         const item = CATALOG.find((c) => ` ${arg.toLowerCase()} `.includes(` ${c.id} `));
         if (item) summon(item);
       } else {
-        const item = matchObject(arg);
-        if (item && !/^how\b/i.test(arg)) summon(item);
-        else watch(arg);
+        if (/^how\b/i.test(arg)) watch(arg);
+        else showAnything(arg, true);
       }
     };
     Linking.getInitialURL().then(handle).catch(() => {});
@@ -166,7 +194,9 @@ export default function App() {
 
   // ----- guidance text -----
   let guide = null;
-  if (!trackingOk) {
+  if (searchStatus) {
+    guide = searchStatus;
+  } else if (!trackingOk) {
     guide = 'Move your phone slowly to look around';
   } else if (selected && loadState === 'loading') {
     guide = `Loading ${selected.name}...`;
@@ -200,7 +230,7 @@ export default function App() {
       {/* guidance */}
       <View style={styles.topBar} pointerEvents="box-none">
         <View style={[styles.pill, { flexDirection: 'row', alignItems: 'center' }]}>
-          {selected && loadState === 'loading' && (
+          {((selected && loadState === 'loading') || searchStatus) && (
             <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />
           )}
           <Text style={styles.pillText} numberOfLines={2}>
@@ -209,6 +239,11 @@ export default function App() {
         </View>
         {selected && placed && (
           <Text style={styles.hint}>Drag to move · Pinch to resize · Twist to rotate</Text>
+        )}
+        {selected && selected.credit && (
+          <Text style={styles.credit} numberOfLines={1}>
+            {selected.credit}
+          </Text>
         )}
       </View>
 
@@ -293,6 +328,26 @@ export default function App() {
             data={results}
             ListHeaderComponent={
               query.trim().length > 1 ? (
+                <View>
+                <TouchableOpacity
+                  style={styles.row}
+                  onPress={() => {
+                    const q = query.trim();
+                    setQuery('');
+                    showAnything(q, true);
+                  }}
+                  activeOpacity={0.6}
+                >
+                  <View style={[styles.rowIcon, { backgroundColor: '#3a6df0' }]}>
+                    <Text style={styles.rowIconText}>3D</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowName} numberOfLines={1}>
+                      Find "{query.trim()}" in 3D
+                    </Text>
+                    <Text style={styles.rowCat}>Searches online 3D libraries and places it in front of you</Text>
+                  </View>
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.row}
                   onPress={() => {
@@ -312,13 +367,14 @@ export default function App() {
                     <Text style={styles.rowCat}>YouTube video, plays over your camera</Text>
                   </View>
                 </TouchableOpacity>
+                </View>
               ) : null
             }
             keyExtractor={(i) => i.id}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ paddingBottom: 48 }}
             ListEmptyComponent={
-              <Text style={styles.empty}>No 3D object for "{query}" yet. Tap Watch to see it on YouTube.</Text>
+              <Text style={styles.empty}>Not in My View yet. Tap Find in 3D or Watch above.</Text>
             }
             renderItem={({ item }) => (
               <TouchableOpacity style={styles.row} onPress={() => pick(item)} activeOpacity={0.6}>
@@ -423,6 +479,13 @@ const styles = StyleSheet.create({
   rowName: { color: '#fff', fontSize: 16, fontWeight: '500' },
   rowCat: { color: 'rgba(255,255,255,0.55)', fontSize: 12, marginTop: 2 },
   rowDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#34c759' },
+  credit: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 10,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowRadius: 4,
+  },
   chips: { flexGrow: 0, marginBottom: 6 },
   chip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)' },
   chipOn: { backgroundColor: '#ffffff' },
