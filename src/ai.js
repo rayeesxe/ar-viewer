@@ -11,7 +11,7 @@ export const aiAvailable = () => !!KEY;
 
 let goodModel = null;
 
-async function ask(prompt, { timeoutMs = 9000 } = {}) {
+async function ask(prompt, { timeoutMs = 9000, image = null } = {}) {
   if (!KEY) return null;
   const order = goodModel ? [goodModel, ...MODELS.filter((m) => m !== goodModel)] : MODELS;
   for (const model of order) {
@@ -25,7 +25,14 @@ async function ask(prompt, { timeoutMs = 9000 } = {}) {
           headers: { 'Content-Type': 'application/json' },
           signal: ctrl ? ctrl.signal : undefined,
           body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            contents: [
+              {
+                role: 'user',
+                parts: image
+                  ? [{ inline_data: { mime_type: image.mime, data: image.data } }, { text: prompt }]
+                  : [{ text: prompt }],
+              },
+            ],
             generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
           }),
         }
@@ -76,8 +83,12 @@ Decide what they want and reply with JSON only:
  "action": "video" (they want to watch/learn/listen: tutorials, recipes, music, news, how to do something)
          | "object" (they want to SEE a thing in 3D: an animal, landmark, planet, vehicle, body part, object)
          | "both" (a how-to where showing the thing in 3D also helps, e.g. "how does a heart work")
+         | "answer" (a quick question with a short spoken answer, e.g. "how long do I boil an egg", "how many grams in a cup")
+         | "look" (they want you to look through the camera: "what is this", "what am I looking at", "what can I make with this")
          | "command" (control something already in the room)
          | "none" (not meant for the app, background chatter),
+ "answer": "for answer: the reply in 1 or 2 short spoken sentences",
+ "suggestions": ["for answer: up to 3 short follow-up requests the user may want, e.g. 'show me how to boil an egg'"],
  "video_query": "best YouTube search for a clear, well-made video. For how-to and recipes ask for a step by step tutorial, avoid reviews, reactions and shorts",
  "object": "short English name of the 3D thing to find, e.g. 'pyramids of Giza', 'T rex', 'human heart'",
  "size_m": number, how big the object should appear in metres (largest side): its real size up to 6, landmarks and buildings as a 1 metre table model, planets 0.6,
@@ -90,9 +101,10 @@ Decide what they want and reply with JSON only:
   return res;
 }
 
-// Pick the most useful video from search results
+// Pick the most useful video from search results.
+// Returns { best: index, relevant: false when none of them is really what was asked for }
 export async function pickBest(request, videos) {
-  if (!KEY || !videos || videos.length < 2) return 0;
+  if (!KEY || !videos || !videos.length) return { best: 0, relevant: true };
   const list = videos
     .map((v, i) => `${i}: "${v.title}"${v.channel ? ' by ' + v.channel : ''}${v.length ? ' (' + v.length + ')' : ''}`)
     .join('\n');
@@ -100,13 +112,41 @@ export async function pickBest(request, videos) {
     `A user standing in their kitchen/room asked: "${request}". They want to watch it hands free on a screen.
 Pick the single best video: a clear tutorial or the real thing they asked for, good quality, ideally 3 to 20 minutes.
 Avoid reviews, reactions, compilations, shorts, clickbait and anything off topic.
+The video must be about exactly what they asked for (a sandwich request must not get a cake video).
 Videos:
 ${list}
-Reply with JSON only: {"best": index}`,
+Reply with JSON only: {"best": index, "relevant": true or false (false if none of them is about what they asked)}`,
+    { timeoutMs: 7000 }
+  );
+  if (!res) return { best: 0, relevant: true };
+  const i = Number(res.best);
+  return {
+    best: Number.isInteger(i) && i >= 0 && i < videos.length ? i : 0,
+    relevant: res.relevant !== false,
+  };
+}
+
+// A better search when the first results were off topic
+export async function betterQuery(request, badTitles) {
+  const res = await ask(
+    `A YouTube search for "${request}" gave off-topic results like: ${badTitles.slice(0, 4).join(' | ')}.
+Write one better YouTube search that will find a clear video of exactly what they asked for.
+Reply with JSON only: {"query": "..."}`,
     { timeoutMs: 6000 }
   );
-  const i = res && Number(res.best);
-  return Number.isInteger(i) && i >= 0 && i < videos.length ? i : 0;
+  return res && res.query ? String(res.query) : null;
+}
+
+// Look through the camera and answer
+export async function lookAt(imageBase64, question, mime = 'image/jpeg') {
+  const res = await ask(
+    `You are "My View", an AR assistant looking through the user's phone camera. They asked: "${question}".
+Answer helpfully in 1 to 3 short spoken sentences about what you can see. If they ask what they can make or do,
+suggest the best idea. Then give up to 3 follow-up requests they could say, e.g. "show me how to make an omelette".
+Reply with JSON only: {"answer": "...", "suggestions": ["..."]}`,
+    { image: { mime, data: imageBase64 }, timeoutMs: 20000 }
+  );
+  return res && res.answer ? res : null;
 }
 
 // Short step list for a how-to, when understand() didn't provide one

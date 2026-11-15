@@ -1,10 +1,9 @@
 // Step-by-step card pinned beside a how-to video. Say "next step" or tap a step.
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Animated } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, useWindowDimensions } from 'react-native';
 import { onPose, project, pose } from './camera';
 import { removeEntity, updateEntity } from './store';
 
-const { width: W, height: H } = Dimensions.get('window');
 const CW = 260;
 const CH = 300;
 const SIZE_M = 0.5; // width in the room
@@ -12,6 +11,8 @@ const SIZE_M = 0.5; // width in the room
 export default function StepsEntity({ entity }) {
   const steps = entity.steps || [];
   const cur = Math.min(entity.stepIdx || 0, Math.max(0, steps.length - 1));
+  const { width: W, height: H } = useWindowDimensions();
+  const landscape = W > H;
 
   const tx = useRef(new Animated.Value(-9999)).current;
   const ty = useRef(new Animated.Value(-9999)).current;
@@ -28,7 +29,11 @@ export default function StepsEntity({ entity }) {
   };
 
   useEffect(() => {
-    if (!entity.pos) return undefined;
+    if (!entity.pos || landscape) {
+      op.setValue(0);
+      setHidden(true);
+      return undefined;
+    }
     const update = () => {
       const p = project(entity.pos);
       if (!p || p.x < -W || p.x > 2 * W || p.y < -H || p.y > 2 * H) {
@@ -52,7 +57,7 @@ export default function StepsEntity({ entity }) {
     };
     update();
     return onPose(update);
-  }, [entity.pos, entity.yaw]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [entity.pos, entity.yaw, landscape, W, H]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (i) => updateEntity(entity.id, { stepIdx: Math.max(0, Math.min(steps.length - 1, i)) });
 

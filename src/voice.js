@@ -108,6 +108,8 @@ const COMMANDS = [
   [/^(clear( everything| all| the room| my room)?|remove everything)$/, 'clear'],
   [/^(next step|next|done|what'?s next)$/, 'next_step'],
   [/^(previous step|go back|back|last step)$/, 'previous_step'],
+  [/^(what is this|what's this|whats this|what is that|what's that|whats that|what am i looking at|what do you see|look at this)$/, 'look'],
+  [/^(stop talking|be quiet|shut up|okay thanks|ok thanks|thanks|thank you)$/, 'hush'],
 ];
 
 export function quickCommand(text) {
@@ -122,5 +124,5 @@ export function quickCommand(text) {
 }
 
 // Is this worth acting on? Filters out background talk (and voices coming from videos)
-const ASK = /^(hey |ok |okay )?(my view |view )?(please )?(show|play|find|search|open|put|place|bring|add|give|teach|how|i want|i'd like|can you|could you|let me|watch|display|get me|make|what does|what is|explain)/;
+const ASK = /^(hey |ok |okay )?(my view |view )?(please )?(show|play|find|search|open|put|place|bring|add|give|teach|how|i want|i'd like|can you|could you|let me|watch|display|get me|make|what|what's|whats|tell me|explain|is it|should i|which|why|when|where|who|look)/;
 export const looksLikeRequest = (text) => ASK.test(text.toLowerCase().trim());

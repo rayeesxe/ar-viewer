@@ -26,6 +26,9 @@ let state = {
   voiceState: 'off', // off | listening | denied | error
   heard: '', // live caption of what you are saying
   cmd: null, // { target, name, n } command for one item in the room
+  speaking: false, // the app is talking (mic paused)
+  focusId: null, // the video that goes full screen when you turn the phone sideways
+  answer: null, // { text, suggestions } answer card from the AI
 };
 
 const listeners = new Set();
@@ -84,11 +87,12 @@ export function removeEntity(id) {
     entities: state.entities.filter((e) => e.id !== id && e.linkedTo !== id),
     selectedId: state.selectedId === id ? null : state.selectedId,
     soundId: state.soundId === id ? null : state.soundId,
+    focusId: state.focusId === id ? null : state.focusId,
   });
 }
 
 export function clearRoom() {
-  setState({ entities: [], selectedId: null, soundId: null, pendingLoad: 'idle' });
+  setState({ entities: [], selectedId: null, soundId: null, focusId: null, pendingLoad: 'idle' });
 }
 
 let cmdN = 0;

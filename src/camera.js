@@ -1,14 +1,21 @@
 // Live phone position in the room, shared by the AR scene and the pinned video screens.
 import { Dimensions, PixelRatio } from 'react-native';
 
-const { width: W, height: H } = Dimensions.get('window');
+// screen size, kept up to date when the phone rotates
+let W = Dimensions.get('window').width;
+let H = Dimensions.get('window').height;
+Dimensions.addEventListener('change', ({ window }) => {
+  W = window.width;
+  H = window.height;
+});
+export const isLandscape = () => W > H;
 
 export const pose = {
   position: null, // [x, y, z] metres
   forward: [0, 0, -1],
   up: [0, 1, 0],
   floorY: null, // height of the floor once ARKit has seen it
-  focal: H * 0.785, // screen points per metre at 1 m; refined by calibrate()
+  focal: Math.max(W, H) * 0.785, // screen points per metre at 1 m (portrait); refined by calibrate()
 };
 
 const listeners = new Set();

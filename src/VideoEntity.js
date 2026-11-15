@@ -7,17 +7,16 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Dimensions,
   Animated,
   PanResponder,
+  useWindowDimensions,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { searchVideos } from './youtube';
-import { aiAvailable, pickBest } from './ai';
+import { aiAvailable, pickBest, betterQuery } from './ai';
 import { onPose, project, pose } from './camera';
 import { setState, removeEntity, updateEntity, useStore } from './store';
 
-const { width: W, height: H } = Dimensions.get('window');
 const ORIGIN = 'https://myview.app';
 
 export const DEFAULT_SIZE = 0.9; // metres wide in the room (16:9)
@@ -61,6 +60,11 @@ export default function VideoEntity({ entity, onPlace }) {
   const cmd = useStore((s) => s.cmd);
   const hasSound = soundId === entity.id;
   const size = entity.size || DEFAULT_SIZE;
+  const focusId = useStore((s) => s.focusId);
+  const { width: W, height: H } = useWindowDimensions();
+  const landscape = W > H;
+  // turn the phone sideways: the video you picked (or the one playing sound) fills the screen
+  const full = landscape && (focusId ? focusId === entity.id : hasSound || pending);
 
   const [videos, setVideos] = useState(null); // null = searching
   const [idx, setIdx] = useState(0);
@@ -90,13 +94,27 @@ export default function VideoEntity({ entity, onPlace }) {
     setVideos(null);
     setIdx(0);
     (async () => {
-      const v = await searchVideos(entity.query);
+      let v = await searchVideos(entity.query);
       if (!live) return;
-      if (aiAvailable() && v.length > 1) {
-        // let Gemini choose the most useful one and put it first
-        const best = await pickBest(entity.request || entity.query, v);
+      if (aiAvailable() && v.length) {
+        // let Gemini check the results really match, and choose the best one
+        const ask = entity.request || entity.query;
+        let pick = await pickBest(ask, v);
         if (!live) return;
-        if (best > 0) v.unshift(v.splice(best, 1)[0]);
+        if (!pick.relevant) {
+          const q2 = await betterQuery(ask, v.map((x) => x.title));
+          if (!live) return;
+          if (q2) {
+            const v2 = await searchVideos(q2);
+            if (!live) return;
+            if (v2.length) {
+              v = v2;
+              pick = await pickBest(ask, v);
+              if (!live) return;
+            }
+          }
+        }
+        if (pick.best > 0) v.unshift(v.splice(pick.best, 1)[0]);
       }
       setVideos(v);
     })();
@@ -114,6 +132,22 @@ export default function VideoEntity({ entity, onPlace }) {
 
   // Follow the phone so the screen stays fixed in the room
   useEffect(() => {
+    if (full) {
+      // sideways: fill the screen like a normal video player
+      tx.setValue(W / 2);
+      ty.setValue(H / 2);
+      sc.setValue(Math.min(W / CW, H / CH));
+      sx.setValue(1);
+      op.setValue(1);
+      setHidden(false);
+      return undefined;
+    }
+    if (landscape) {
+      // sideways but not the chosen video: keep out of the way
+      op.setValue(0);
+      setHidden(true);
+      return undefined;
+    }
     if (pending || !entity.pos) {
       tx.setValue(W / 2);
       ty.setValue(H * 0.36);
@@ -149,9 +183,10 @@ export default function VideoEntity({ entity, onPlace }) {
     };
     update();
     return onPose(update);
-  }, [pending, entity.pos, entity.yaw, size]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pending, entity.pos, entity.yaw, size, full, landscape, W, H]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const showControls = () => {
+    setState({ focusId: entity.id });
     setControls(true);
     clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => setControls(false), 4000);
@@ -290,6 +325,7 @@ export default function VideoEntity({ entity, onPlace }) {
       pointerEvents={hidden ? 'none' : 'box-none'}
       style={[
         styles.card,
+        full && styles.cardFull,
         {
           opacity: op,
           transform: [
@@ -380,6 +416,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.25)',
   },
+  cardFull: { borderRadius: 0, borderWidth: 0 },
   video: { width: CW, height: CH, backgroundColor: '#000' },
   web: { width: CW, height: CH, backgroundColor: '#000' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16 },
