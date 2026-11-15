@@ -14,28 +14,28 @@ export const onlineSources = () => ({
   meshy: !!MESHY,
 });
 
-// glTF features the AR engine cannot draw (objects would be invisible or fail to load)
+// glTF features the AR engine cannot draw: compressed meshes/textures fail to load,
+// and glass-type materials come out invisible. Finishing layers (specular, clearcoat,
+// sheen) are simply ignored by the engine, so those models are still fine to show.
 const BLOCKED = [
   'KHR_draco_mesh_compression',
   'EXT_meshopt_compression',
   'KHR_texture_basisu',
   'EXT_texture_webp',
   'EXT_texture_avif',
+  'KHR_mesh_quantization',
   'KHR_materials_transmission',
   'KHR_materials_volume',
-  'KHR_materials_sheen',
-  'KHR_materials_iridescence',
-  'KHR_materials_clearcoat',
-  'KHR_materials_specular',
-  'KHR_materials_ior',
-  'KHR_materials_anisotropy',
-  'KHR_materials_dispersion',
   'KHR_materials_diffuse_transmission',
+  'KHR_materials_dispersion',
   'KHR_materials_pbrSpecularGlossiness',
-  'KHR_mesh_quantization',
 ];
 
-const MAX_BYTES = 40e6;
+const MAX_BYTES = 30e6; // keeps downloads quick on mobile data
+
+// Models that failed to load on this phone, so a retry picks a different one
+const failed = new Set();
+export const markFailed = (key) => key && failed.add(key);
 
 const bytesToAscii = (u8) => {
   let s = '';
@@ -80,12 +80,16 @@ async function fromSketchfab(q, onStatus) {
   if (!SKETCHFAB) return null;
   onStatus && onStatus('Searching Sketchfab');
   const r = await fetch(
-    'https://api.sketchfab.com/v3/search?type=models&downloadable=true&count=12&sort_by=-likeCount&max_face_count=400000&q=' +
+    'https://api.sketchfab.com/v3/search?type=models&downloadable=true&count=12&max_face_count=400000&q=' +
       encodeURIComponent(q)
   );
   if (!r.ok) return null;
   const j = await r.json();
-  for (const m of (j.results || []).slice(0, 8)) {
+  const picks = (j.results || [])
+    .filter((m) => !failed.has('sf:' + m.uid))
+    .filter((m) => !(m.archives && m.archives.glb && m.archives.glb.size > MAX_BYTES))
+    .slice(0, 6);
+  for (const m of picks) {
     try {
       const d = await fetch(`https://api.sketchfab.com/v3/models/${m.uid}/download`, {
         headers: { Authorization: `Token ${SKETCHFAB}` },
@@ -97,6 +101,7 @@ async function fromSketchfab(q, onStatus) {
       if (dl.glb.size && dl.glb.size > MAX_BYTES) continue;
       if (!(await drawable(url))) continue;
       return {
+        key: 'sf:' + m.uid,
         url,
         name: m.name,
         credit: `${m.name} by ${(m.user && m.user.displayName) || 'Sketchfab artist'}${
@@ -121,9 +126,11 @@ async function fromPolyPizza(q, onStatus) {
   const j = await r.json();
   for (const m of j.results || []) {
     const url = m.Download;
+    if (failed.has('pp:' + url)) continue;
     if (!url || !(await drawable(url))) continue;
     const by = (m.Creator && m.Creator.Username) || 'Poly Pizza artist';
     return {
+      key: 'pp:' + url,
       url,
       name: m.Title || q,
       credit: `${m.Title || q} by ${by}${m.Licence ? `, ${m.Licence}` : ''} (Poly Pizza)`,
@@ -175,7 +182,7 @@ async function fromMeshy(q, onStatus) {
   }
   const url = done.model_urls && done.model_urls.glb;
   if (!url) return null;
-  return { url, name: q, credit: `${q}, created with Meshy AI` };
+  return { key: 'ai:' + url, url, name: q, credit: `${q}, created with Meshy AI` };
 }
 
 // Returns { url, name, credit } or null when nothing could be found or made.
