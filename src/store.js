@@ -1,22 +1,24 @@
-// Tiny shared store so the AR scene (rendered by Viro) and the app UI stay in sync.
+// Shared app state: everything in your room, plus what the AR engine reports.
 import { useSyncExternalStore } from 'react';
 
 let state = {
-  // UI -> scene
-  modelId: null,
-  modelUrl: null,
-  placeNonce: 0, // increments when the user taps "Place"
-  placed: false,
-  placeFront: false, // Siri: place in front of you even if no floor is in view
-  videoQuery: null, // what the floating YouTube panel is showing
-  remote: null, // { name, credit } for a model found online
-  searchStatus: null, // e.g. 'Searching Sketchfab' while looking online
+  // Things in the room. Each: { id, kind: 'model' | 'video', status: 'pending' | 'placed',
+  //   url, name, credit (models) | query (videos), pos, yaw, floating, auto }
+  entities: [],
+  selectedId: null, // placed object you tapped
+  soundId: null, // the one video playing with sound
+  placeNonce: 0, // increments when the user taps Place (or Siri places)
+  pendingLoad: 'idle', // idle | loading | ready | error, for the object being placed
 
-  // scene -> UI
-  trackingOk: false, // ARKit is tracking the room normally
-  surfaceFound: false, // a floor/table has been detected at least once
-  aimOnSurface: false, // the centre of the screen is on a detected surface
-  loadState: 'idle', // idle | loading | ready | error
+  // AR engine -> UI
+  trackingOk: false,
+  surfaceFound: false,
+  aimOnSurface: false,
+
+  // online search
+  searchStatus: null,
+  searchLog: null,
+  toast: null,
 };
 
 const listeners = new Set();
@@ -42,6 +44,44 @@ const subscribe = (l) => {
   return () => listeners.delete(l);
 };
 
-// Select a single primitive value from the store.
-export const useStore = (selector) =>
-  useSyncExternalStore(subscribe, () => selector(state));
+export const useStore = (selector) => useSyncExternalStore(subscribe, () => selector(state));
+
+// ----- room helpers -----
+let seq = 0;
+export const newId = () => `e${Date.now().toString(36)}${(seq++).toString(36)}`;
+
+export const pendingEntity = () => state.entities.find((e) => e.status === 'pending') || null;
+
+// Start placing something new (replaces anything still waiting to be placed)
+export function addPending(entity) {
+  const id = entity.id || newId();
+  setState({
+    entities: [...state.entities.filter((e) => e.status !== 'pending'), { ...entity, id, status: 'pending' }],
+    pendingLoad: entity.kind === 'model' ? 'loading' : 'idle',
+    selectedId: null,
+  });
+  return id;
+}
+
+export function updateEntity(id, patch) {
+  setState({ entities: state.entities.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
+}
+
+export function removeEntity(id) {
+  setState({
+    entities: state.entities.filter((e) => e.id !== id),
+    selectedId: state.selectedId === id ? null : state.selectedId,
+    soundId: state.soundId === id ? null : state.soundId,
+  });
+}
+
+export function clearRoom() {
+  setState({ entities: [], selectedId: null, soundId: null, pendingLoad: 'idle' });
+}
+
+let toastTimer = null;
+export function toast(msg, ms = 3500) {
+  clearTimeout(toastTimer);
+  setState({ toast: msg });
+  toastTimer = setTimeout(() => setState({ toast: null }), ms);
+}

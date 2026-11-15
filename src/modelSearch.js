@@ -54,37 +54,53 @@ async function readBytes(r) {
   }
 }
 
-async function drawable(url) {
+async function drawable(url, log) {
   try {
     let r = await fetch(url, { headers: { Range: 'bytes=0-19' } });
-    if (!r.ok && r.status !== 206) return false;
+    if (!r.ok && r.status !== 206) {
+      log && log.push(`file not reachable (${r.status})`);
+      return false;
+    }
     const head = await readBytes(r);
     if (!head) return true;
     const dv = new DataView(head.buffer);
     if (dv.getUint32(0, true) !== 0x46546c67) return false; // "glTF"
     const total = dv.getUint32(8, true);
-    if (total > MAX_BYTES) return false;
+    if (total > MAX_BYTES) {
+      log && log.push('too large');
+      return false;
+    }
     const len = dv.getUint32(12, true);
     r = await fetch(url, { headers: { Range: `bytes=20-${19 + len}` } });
     const body = await readBytes(r);
     if (!body) return true;
     const json = JSON.parse(bytesToAscii(body));
     const used = (json.extensionsUsed || []).concat(json.extensionsRequired || []);
-    return !used.some((e) => BLOCKED.includes(e));
+    const bad = used.filter((e) => BLOCKED.includes(e));
+    if (bad.length) log && log.push('unsupported ' + bad[0].replace(/^(KHR|EXT)_/, ''));
+    return !bad.length;
   } catch (e) {
+    log && log.push('check failed: ' + (e && e.message));
     return false;
   }
 }
 
-async function fromSketchfab(q, onStatus) {
-  if (!SKETCHFAB) return null;
+async function fromSketchfab(q, onStatus, log) {
+  if (!SKETCHFAB) {
+    log.push('Sketchfab: no key');
+    return null;
+  }
   onStatus && onStatus('Searching Sketchfab');
   const r = await fetch(
     'https://api.sketchfab.com/v3/search?type=models&downloadable=true&count=12&max_face_count=400000&q=' +
       encodeURIComponent(q)
   );
-  if (!r.ok) return null;
+  if (!r.ok) {
+    log.push(`Sketchfab search error ${r.status}`);
+    return null;
+  }
   const j = await r.json();
+  log.push(`Sketchfab: ${(j.results || []).length} results`);
   const picks = (j.results || [])
     .filter((m) => !failed.has('sf:' + m.uid))
     .filter((m) => !(m.archives && m.archives.glb && m.archives.glb.size > MAX_BYTES))
@@ -94,12 +110,19 @@ async function fromSketchfab(q, onStatus) {
       const d = await fetch(`https://api.sketchfab.com/v3/models/${m.uid}/download`, {
         headers: { Authorization: `Token ${SKETCHFAB}` },
       });
-      if (!d.ok) continue;
+      if (!d.ok) {
+        log.push(`download refused ${d.status}${d.status === 401 || d.status === 403 ? ' (check the Sketchfab token)' : ''}`);
+        if (d.status === 401 || d.status === 403) return null;
+        continue;
+      }
       const dl = await d.json();
       const url = dl.glb && dl.glb.url;
-      if (!url) continue;
+      if (!url) {
+        log.push('no glb file');
+        continue;
+      }
       if (dl.glb.size && dl.glb.size > MAX_BYTES) continue;
-      if (!(await drawable(url))) continue;
+      if (!(await drawable(url, log))) continue;
       return {
         key: 'sf:' + m.uid,
         url,
@@ -109,25 +132,32 @@ async function fromSketchfab(q, onStatus) {
         } (Sketchfab)`,
       };
     } catch (e) {
-      // try the next model
+      log.push('error ' + (e && e.message));
     }
   }
   return null;
 }
 
-async function fromPolyPizza(q, onStatus) {
-  if (!POLYPIZZA) return null;
+async function fromPolyPizza(q, onStatus, log) {
+  if (!POLYPIZZA) {
+    log.push('Poly Pizza: no key');
+    return null;
+  }
   onStatus && onStatus('Searching Poly Pizza');
   const r = await fetch(
     `https://api.poly.pizza/v1/search/${encodeURIComponent(q)}?limit=8&format=glb`,
     { headers: { 'X-Auth-Token': POLYPIZZA } }
   );
-  if (!r.ok) return null;
+  if (!r.ok) {
+    log.push(`Poly Pizza error ${r.status}`);
+    return null;
+  }
   const j = await r.json();
+  log.push(`Poly Pizza: ${(j.results || []).length} results`);
   for (const m of j.results || []) {
     const url = m.Download;
     if (failed.has('pp:' + url)) continue;
-    if (!url || !(await drawable(url))) continue;
+    if (!url || !(await drawable(url, log))) continue;
     const by = (m.Creator && m.Creator.Username) || 'Poly Pizza artist';
     return {
       key: 'pp:' + url,
@@ -167,7 +197,7 @@ async function meshyWait(id, onStatus, label) {
   return null;
 }
 
-async function fromMeshy(q, onStatus) {
+async function fromMeshy(q, onStatus, log) {
   if (!MESHY) return null;
   onStatus && onStatus('Creating a 3D model with AI');
   const preview = await meshyTask({ mode: 'preview', prompt: q, art_style: 'realistic' });
@@ -185,15 +215,16 @@ async function fromMeshy(q, onStatus) {
   return { key: 'ai:' + url, url, name: q, credit: `${q}, created with Meshy AI` };
 }
 
-// Returns { url, name, credit } or null when nothing could be found or made.
+// Returns { model: { key, url, name, credit } | null, log: [what happened] }
 export async function findModel(q, onStatus) {
+  const log = [];
   for (const fn of [fromSketchfab, fromPolyPizza, fromMeshy]) {
     try {
-      const m = await fn(q, onStatus);
-      if (m) return m;
+      const m = await fn(q, onStatus, log);
+      if (m) return { model: m, log };
     } catch (e) {
-      // move on to the next source
+      log.push('network error: ' + (e && e.message));
     }
   }
-  return null;
+  return { model: null, log };
 }
