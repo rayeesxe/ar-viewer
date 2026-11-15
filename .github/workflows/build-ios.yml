@@ -22,6 +22,7 @@ jobs:
       SKETCHFAB_TOKEN: ${{ secrets.SKETCHFAB_TOKEN }}
       POLYPIZZA_KEY: ${{ secrets.POLYPIZZA_KEY }}
       MESHY_KEY: ${{ secrets.MESHY_KEY }}
+      GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
 
     steps:
       - name: Get the code
@@ -35,7 +36,7 @@ jobs:
       - name: Install packages
         run: |
           npm install --no-audit --no-fund
-          npx expo install react-native-webview expo-constants
+          npx expo install react-native-webview expo-constants expo-speech-recognition
 
       - name: Show Xcode version
         run: xcodebuild -version
