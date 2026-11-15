@@ -19,6 +19,7 @@ let state = {
   searchStatus: null,
   searchLog: null,
   toast: null,
+  recents: [], // things you asked for recently
 };
 
 const listeners = new Set();
