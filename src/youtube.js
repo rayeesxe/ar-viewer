@@ -16,7 +16,7 @@ const decode = (s) =>
 async function viaApi(q) {
   if (!API_KEY) return [];
   const url =
-    'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=6&videoEmbeddable=true&safeSearch=moderate&q=' +
+    'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=8&videoEmbeddable=true&safeSearch=moderate&q=' +
     encodeURIComponent(q) +
     '&key=' +
     API_KEY;
@@ -25,7 +25,11 @@ async function viaApi(q) {
   const j = await r.json();
   return (j.items || [])
     .filter((i) => i.id && i.id.videoId)
-    .map((i) => ({ id: i.id.videoId, title: decode(i.snippet.title || '') }));
+    .map((i) => ({
+      id: i.id.videoId,
+      title: decode(i.snippet.title || ''),
+      channel: decode(i.snippet.channelTitle || ''),
+    }));
 }
 
 async function viaResultsPage(q) {
@@ -45,12 +49,19 @@ async function viaResultsPage(q) {
   const out = [];
   const re = /"videoRenderer":\{"videoId":"([\w-]{11})"/g;
   let m;
-  while ((m = re.exec(html)) && out.length < 6) {
+  while ((m = re.exec(html)) && out.length < 8) {
     const id = m[1];
     if (out.some((v) => v.id === id)) continue;
-    const chunk = html.slice(m.index, m.index + 3000);
+    const chunk = html.slice(m.index, m.index + 6000);
     const t = chunk.match(/"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/);
-    out.push({ id, title: t ? decode(t[1]) : '' });
+    const ch = chunk.match(/"ownerText":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/);
+    const len = chunk.match(/"lengthText":\{[\s\S]{0,300}?"simpleText":"([0-9:]+)"/);
+    out.push({
+      id,
+      title: t ? decode(t[1]) : '',
+      channel: ch ? decode(ch[1]) : '',
+      length: len ? len[1] : '',
+    });
   }
   return out;
 }

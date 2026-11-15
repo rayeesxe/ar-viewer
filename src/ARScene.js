@@ -77,7 +77,8 @@ function ModelEntity({ entity, reticle, selected, castShadow }) {
         if (!isFinite(maxDim) || maxDim <= 0) throw new Error('bad bounds');
         // keep real-world size when believable; tiny items to ~35 cm, huge ones (buildings) to ~1 m
         let k = 1;
-        if (maxDim < 0.15) k = 0.35 / maxDim;
+        if (entity.sizeM > 0) k = Math.min(6, entity.sizeM) / maxDim; // real-world size from AI
+        else if (maxDim < 0.15) k = 0.35 / maxDim;
         else if (maxDim > 3) k = 1 / maxDim;
         const cx = (b.minX + b.maxX) / 2;
         const cz = (b.minZ + b.maxZ) / 2;
@@ -143,7 +144,7 @@ function ModelEntity({ entity, reticle, selected, castShadow }) {
       <ViroNode
         position={nodePos}
         rotation={[0, (entity.yaw || 0) + spin, 0]}
-        scale={[userScale, userScale, userScale]}
+        scale={[userScale * (entity.boost || 1), userScale * (entity.boost || 1), userScale * (entity.boost || 1)]}
         opacity={opacity}
         dragType={pending ? undefined : 'FixedToPlane'}
         dragPlane={
@@ -206,8 +207,8 @@ export default function ARScene(props) {
   // Place pressed (or Siri asked): anchor the waiting object
   useEffect(() => {
     if (!placeNonce) return;
-    const e = pendingEntity();
-    if (!e || e.kind !== 'model' || getState().pendingLoad !== 'ready') return;
+    const e = pendingEntity('model');
+    if (!e || getState().pendingLoad !== 'ready') return;
     let pos = reticleRef.current;
     let floating = false;
     if (!pos || !getState().aimOnSurface) {

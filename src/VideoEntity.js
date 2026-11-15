@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { searchVideos } from './youtube';
+import { aiAvailable, pickBest } from './ai';
 import { onPose, project, pose } from './camera';
 import { setState, removeEntity, updateEntity, useStore } from './store';
 
@@ -57,6 +58,7 @@ setTimeout(function(){if(!window.YT||!window.YT.Player)post('error:load')},8000)
 export default function VideoEntity({ entity, onPlace }) {
   const pending = entity.status === 'pending';
   const soundId = useStore((s) => s.soundId);
+  const cmd = useStore((s) => s.cmd);
   const hasSound = soundId === entity.id;
   const size = entity.size || DEFAULT_SIZE;
 
@@ -87,7 +89,17 @@ export default function VideoEntity({ entity, onPlace }) {
     let live = true;
     setVideos(null);
     setIdx(0);
-    searchVideos(entity.query).then((v) => live && setVideos(v));
+    (async () => {
+      const v = await searchVideos(entity.query);
+      if (!live) return;
+      if (aiAvailable() && v.length > 1) {
+        // let Gemini choose the most useful one and put it first
+        const best = await pickBest(entity.request || entity.query, v);
+        if (!live) return;
+        if (best > 0) v.unshift(v.splice(best, 1)[0]);
+      }
+      setVideos(v);
+    })();
     return () => {
       live = false;
     };
@@ -196,6 +208,41 @@ export default function VideoEntity({ entity, onPlace }) {
     updateEntity(entity.id, { size: Math.max(0.3, Math.min(4, size * f)) });
     showControls();
   };
+
+  // voice commands aimed at this screen
+  useEffect(() => {
+    if (!cmd || cmd.target !== entity.id) return;
+    switch (cmd.name) {
+      case 'pause':
+        js('window.__p&&__p.pauseVideo()');
+        break;
+      case 'play':
+        js('window.__p&&__p.playVideo()');
+        break;
+      case 'next_video':
+        next();
+        break;
+      case 'mute':
+        setState({ soundId: null });
+        break;
+      case 'unmute':
+        setState({ soundId: entity.id });
+        break;
+      case 'bigger':
+        resize(1.3);
+        break;
+      case 'smaller':
+        resize(0.75);
+        break;
+      case 'here':
+        onPlace && onPlace();
+        break;
+      case 'remove':
+        removeEntity(entity.id);
+        break;
+      default:
+    }
+  }, [cmd && cmd.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let body;
   if (videos === null) {
